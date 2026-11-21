@@ -10,10 +10,30 @@ pub struct Report {
     pub findings: Vec<DllFinding>,
 }
 
+#[derive(serde::Serialize)]
+pub struct BatchEntry {
+    pub target: String,
+    pub app_dir_writable: bool,
+    pub total_imports: usize,
+    pub hijackable_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_class: Option<HijackClass>,
+    pub top_dlls: Vec<String>,
+    pub has_deep_chain: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct BatchReport {
+    pub scan_dir: String,
+    pub total_exes: usize,
+    pub exes_with_findings: usize,
+    pub entries: Vec<BatchEntry>,
+}
+
 pub fn print_table(report: &Report) {
     println!();
     println!("  DLL HIJACK HUNTER");
-    println!("  ─────────────────");
+    println!("  -----------------");
     println!();
     println!("  Target:       {}", report.target);
     println!("  App dir:      {}", report.app_dir);
@@ -47,14 +67,13 @@ pub fn print_table(report: &Report) {
     );
     println!();
 
-    // Header
     println!(
         "  {:<14} {:<30} {:<8} {}",
         "CLASS", "DLL", "SOURCE", "DETAILS"
     );
     println!(
         "  {:<14} {:<30} {:<8} {}",
-        "─────", "───", "──────", "───────"
+        "-----", "---", "------", "-------"
     );
 
     for f in &hijackable {
@@ -70,10 +89,16 @@ pub fn print_table(report: &Report) {
             "  {:<14} {:<30} {:<8} {}",
             class_colored, f.dll_name, f.source, f.details
         );
+
+        if f.import_chain.len() > 2 {
+            println!(
+                "  {:<14} chain: {}",
+                "", f.import_chain.join(" -> ")
+            );
+        }
     }
     println!();
 
-    // Summary recommendations
     let missing_count = hijackable.iter().filter(|f| f.class == HijackClass::Missing).count();
     let phantom_count = hijackable.iter().filter(|f| f.class == HijackClass::Phantom).count();
     let writable_count = hijackable.iter().filter(|f| f.class == HijackClass::WritablePath).count();
@@ -81,10 +106,10 @@ pub fn print_table(report: &Report) {
 
     println!("  Summary:");
     if missing_count > 0 {
-        println!("    MISSING ({missing_count}):       Drop a DLL in app dir — no original to proxy");
+        println!("    MISSING ({missing_count}):       Drop a DLL in app dir - no original to proxy");
     }
     if phantom_count > 0 {
-        println!("    PHANTOM ({phantom_count}):       Build proxy DLL — original loads from System32 but app dir is searched first");
+        println!("    PHANTOM ({phantom_count}):       Build proxy DLL - original loads from System32 but app dir is searched first");
     }
     if writable_count > 0 {
         println!("    WRITABLE_PATH ({writable_count}): Replace DLL in its writable PATH location");
@@ -105,7 +130,7 @@ pub fn print_all(report: &Report) {
     );
     println!(
         "  {:<14} {:<30} {:<8} {}",
-        "─────", "───", "──────", "────────────"
+        "-----", "---", "------", "------------"
     );
 
     for f in &report.findings {
@@ -120,11 +145,71 @@ pub fn print_all(report: &Report) {
             f.source,
             path_or_details
         );
+        if f.import_chain.len() > 2 {
+            println!(
+                "  {:<14} chain: {}",
+                "", f.import_chain.join(" -> ")
+            );
+        }
     }
     println!();
 }
 
 pub fn print_json(report: &Report) {
+    match serde_json::to_string_pretty(report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("  [!] JSON serialization failed: {e}"),
+    }
+}
+
+pub fn print_batch_table(report: &BatchReport) {
+    println!();
+    println!("  DLL HIJACK HUNTER - BATCH SCAN");
+    println!("  ------------------------------");
+    println!();
+    println!("  Scan dir:           {}", report.scan_dir);
+    println!("  Total executables:  {}", report.total_exes);
+    println!("  With findings:      {}", report.exes_with_findings);
+    println!();
+
+    if report.entries.is_empty() {
+        println!("  No hijackable DLLs found in any executable.");
+        println!();
+        return;
+    }
+
+    println!(
+        "  {:<5} {:<14} {:<5} {:<5} {}",
+        "RANK", "BEST CLASS", "HITS", "CHAIN", "TARGET"
+    );
+    println!(
+        "  {:<5} {:<14} {:<5} {:<5} {}",
+        "----", "----------", "----", "-----", "------"
+    );
+
+    for (i, entry) in report.entries.iter().enumerate() {
+        let class_str = entry.best_class.as_ref()
+            .map(|c| format!("{c}"))
+            .unwrap_or_else(|| "-".into());
+        let chain_marker = if entry.has_deep_chain { "yes" } else { "" };
+
+        println!(
+            "  {:<5} {:<14} {:<5} {:<5} {}",
+            i + 1,
+            class_str,
+            entry.hijackable_count,
+            chain_marker,
+            entry.target,
+        );
+
+        for dll in &entry.top_dlls {
+            println!("  {:<5} {:<14}       {}", "", "", dll);
+        }
+    }
+    println!();
+}
+
+pub fn print_batch_json(report: &BatchReport) {
     match serde_json::to_string_pretty(report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("  [!] JSON serialization failed: {e}"),
