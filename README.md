@@ -42,23 +42,20 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
   Original:     notepad++.exe
   Static imports:  19
 
-  Found 12 hijackable DLLs:
+  Found 9 hijackable DLLs:
 
-  CLASS          DLL                            SOURCE   DETAILS
-  -----          ---                            ------   -------
-  [!] PHANTOM    dwmapi.dll                     static   Not in app dir - plant here to hijack [14 exports]
-  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack [28 exports]
-                 chain: notepad++.exe -> version.dll -> userenv.dll
-  [*] SIDELOAD   version.dll                    static   Present in writable app dir [12 exports]
-
-  Exports (for proxy DLL generation):
-  -----------------------------------
-
-  version.dll (12 exports, 0 by ordinal only, 0 forwarded):
-    @1     GetFileVersionInfoA
-    @2     GetFileVersionInfoByHandle
-    @3     GetFileVersionInfoExA
-    ...
+  CLASS          DLL                            SOURCE   STEALTH  DETAILS
+  -----          ---                            ------   -------  -------
+  [!] PHANTOM    sensapi.dll                    static   HIGH     Not in app dir [3 exports]
+                 stealth: 3 exports (trivial proxy), direct import
+  [!] PHANTOM    version.dll                    static   HIGH     Not in app dir [17 exports]
+                 stealth: 17 exports, direct import
+  [!] PHANTOM    dwmapi.dll                     static   MED      Not in app dir [101 exports]
+                 stealth: 101 exports (complex proxy), direct import
+  [!] PHANTOM    crypt32.dll                    static   LOW      Not in app dir [307 exports]
+                 stealth: 307 exports (massive proxy), EDR-watched, direct import
+  [!] PHANTOM    wininet.dll                    static   LOW      Not in app dir [327 exports]
+                 stealth: 327 exports (massive proxy), EDR-watched, direct import
 ```
 
 ## How It Works
@@ -140,6 +137,20 @@ JSON for scripting (exports included in output):
 ```
 omnispex.exe C:\Temp\npp\notepad++.exe --local --exports --json
 ```
+
+## Stealth Scoring
+
+Each hijackable DLL gets a stealth grade (HIGH / MED / LOW) based on how practical and covert the hijack would be:
+
+| Factor | Effect | Why |
+|--------|--------|-----|
+| Export count | Fewer = higher | Proxy DLL with 3 forwards is trivial; 300+ is fragile and slow to build |
+| EDR-watched | Penalty | crypt32, wintrust, bcrypt, ncrypt, wininet, winhttp, urlmon, amsi, dbghelp, ws2_32, dnsapi are heavily hooked by EDR products |
+| Delay-load | Bonus | Loaded lazily -- less likely to crash the app if the proxy has issues |
+| Chain depth | Direct > deep | Direct imports load reliably; depth-3+ chains are more fragile |
+| Class | MISSING > PHANTOM | MISSING = no original to deal with; PHANTOM = need a working proxy |
+
+Results are sorted by class first, then stealth within each class, so the best targets float to the top.
 
 ## PE Metadata
 

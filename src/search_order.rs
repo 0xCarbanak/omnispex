@@ -36,6 +36,13 @@ pub struct DllFinding {
     pub import_chain: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<crate::pe_parser::ExportEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stealth: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stealth_notes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_count: Option<usize>,
+    pub is_delay_load: bool,
 }
 
 pub fn resolve_dll_path(
@@ -157,6 +164,10 @@ fn finding(
         details,
         import_chain: Vec::new(),
         exports: Vec::new(),
+        stealth: None,
+        stealth_notes: Vec::new(),
+        export_count: None,
+        is_delay_load: false,
     }
 }
 

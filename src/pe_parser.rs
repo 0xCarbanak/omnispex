@@ -433,6 +433,41 @@ pub fn parse_imports(data: &[u8]) -> Result<PeImports, String> {
     Ok(PeImports { imports, delay_imports })
 }
 
+pub fn count_exports(data: &[u8]) -> Result<usize, String> {
+    let hdr = parse_pe_header(data)?;
+    if hdr.num_dd == 0 {
+        return Ok(0);
+    }
+    let export_dd = hdr.dd_base;
+    if export_dd + 8 > data.len() {
+        return Ok(0);
+    }
+    let export_rva = read_u32(data, export_dd) as usize;
+    if export_rva == 0 {
+        return Ok(0);
+    }
+    let Some(export_offset) = rva_to_offset(export_rva, &hdr.sections) else {
+        return Ok(0);
+    };
+    if export_offset + 40 > data.len() {
+        return Ok(0);
+    }
+    let num_functions = read_u32(data, export_offset + 20) as usize;
+    let addr_table_rva = read_u32(data, export_offset + 28) as usize;
+    let Some(addr_off) = rva_to_offset(addr_table_rva, &hdr.sections) else {
+        return Ok(num_functions);
+    };
+    let mut count = 0;
+    for i in 0..num_functions {
+        let entry_off = addr_off + i * 4;
+        if entry_off + 4 > data.len() { break; }
+        if read_u32(data, entry_off) != 0 {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 pub fn parse_exports(data: &[u8]) -> Result<PeExports, String> {
     let hdr = parse_pe_header(data)?;
 

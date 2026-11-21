@@ -139,6 +139,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
 
     // Collect all DLLs via static, dynamic, and recursive chain analysis
     let mut all_dlls: HashSet<String> = HashSet::new();
+    let mut delay_load_dlls: HashSet<String> = HashSet::new();
     let mut static_count = 0usize;
     let mut dynamic_count = 0usize;
     let mut dynamic_paths: HashMap<String, String> = HashMap::new();
@@ -157,8 +158,13 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
                             imports.imports.len(), imports.delay_imports.len()
                         );
                     }
-                    for dll in imports.imports.iter().chain(imports.delay_imports.iter()) {
+                    for dll in &imports.imports {
                         all_dlls.insert(dll.clone());
+                        chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
+                    }
+                    for dll in &imports.delay_imports {
+                        all_dlls.insert(dll.clone());
+                        delay_load_dlls.insert(dll.clone());
                         chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
                     }
 
@@ -257,26 +263,57 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             }
         }
 
-        if args.exports && is_hijackable(&f.class) {
-            if let Some(ref path) = f.found_path {
+        if is_hijackable(&f.class) {
+            f.is_delay_load = delay_load_dlls.contains(dll_name);
+
+            // Resolve the DLL file to read exports from.
+            // For PHANTOM in --local mode, found_path is None because we only
+            // check the app dir. Fall back to System32.
+            let dll_file = f.found_path.clone().or_else(|| {
+                if f.class == HijackClass::Phantom || f.class == HijackClass::Missing {
+                    let sys32 = PathBuf::from("C:\\Windows\\System32").join(dll_name);
+                    if sys32.exists() { Some(sys32.display().to_string()) } else { None }
+                } else {
+                    None
+                }
+            });
+
+            if let Some(ref path) = dll_file {
                 if let Ok(dll_data) = std::fs::read(path) {
-                    if let Ok(pe_exports) = pe_parser::parse_exports(&dll_data) {
-                        f.exports = pe_exports.functions;
+                    if args.exports {
+                        if let Ok(pe_exports) = pe_parser::parse_exports(&dll_data) {
+                            f.export_count = Some(pe_exports.functions.len());
+                            f.exports = pe_exports.functions;
+                        }
+                    } else if let Ok(count) = pe_parser::count_exports(&dll_data) {
+                        f.export_count = Some(count);
                     }
                 }
             }
+
+            compute_stealth(&mut f);
         }
 
         findings.push(f);
     }
 
-    findings.sort_by_key(|f| match f.class {
-        HijackClass::Missing => 0,
-        HijackClass::Phantom => 1,
-        HijackClass::WritablePath => 2,
-        HijackClass::Sideload => 3,
-        HijackClass::KnownDll => 4,
-        HijackClass::Safe => 5,
+    findings.sort_by(|a, b| {
+        let class_ord = |c: &HijackClass| match c {
+            HijackClass::Missing => 0,
+            HijackClass::Phantom => 1,
+            HijackClass::WritablePath => 2,
+            HijackClass::Sideload => 3,
+            HijackClass::KnownDll => 4,
+            HijackClass::Safe => 5,
+        };
+        let stealth_ord = |s: &Option<String>| match s.as_deref() {
+            Some("HIGH") => 0,
+            Some("MED") => 1,
+            Some("LOW") => 2,
+            _ => 3,
+        };
+        class_ord(&a.class).cmp(&class_ord(&b.class))
+            .then(stealth_ord(&a.stealth).cmp(&stealth_ord(&b.stealth)))
     });
 
     report::Report {
@@ -288,6 +325,90 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         pe_info,
         findings,
     }
+}
+
+const EDR_WATCHED: &[&str] = &[
+    "amsi.dll", "crypt32.dll", "wintrust.dll", "bcrypt.dll", "ncrypt.dll",
+    "wininet.dll", "winhttp.dll", "urlmon.dll", "dbghelp.dll", "dbgcore.dll",
+    "clr.dll", "mscoree.dll", "mscorlib.dll", "ws2_32.dll", "dnsapi.dll",
+    "secur32.dll", "sspicli.dll", "schannel.dll", "crypt32.dll",
+];
+
+fn compute_stealth(f: &mut DllFinding) {
+    let mut score: i32 = 50;
+    let mut notes: Vec<String> = Vec::new();
+    let lower = f.dll_name.to_lowercase();
+
+    // Export count scoring
+    match f.export_count {
+        Some(n) if n <= 5 => {
+            score += 20;
+            notes.push(format!("{n} exports (trivial proxy)"));
+        }
+        Some(n) if n <= 20 => {
+            score += 10;
+            notes.push(format!("{n} exports"));
+        }
+        Some(n) if n <= 50 => {
+            notes.push(format!("{n} exports"));
+        }
+        Some(n) if n <= 150 => {
+            score -= 10;
+            notes.push(format!("{n} exports (complex proxy)"));
+        }
+        Some(n) => {
+            score -= 25;
+            notes.push(format!("{n} exports (massive proxy)"));
+        }
+        None => {
+            notes.push("export count unknown".into());
+        }
+    }
+
+    // Delay-load bonus
+    if f.is_delay_load {
+        score += 10;
+        notes.push("delay-load".into());
+    }
+
+    // EDR-watched penalty
+    if EDR_WATCHED.contains(&lower.as_str()) {
+        score -= 30;
+        notes.push("EDR-watched".into());
+    }
+
+    // Chain depth — direct imports are simpler to exploit
+    let depth = if f.import_chain.len() > 2 { f.import_chain.len() - 1 } else { 1 };
+    match depth {
+        1 => {
+            score += 5;
+            notes.push("direct import".into());
+        }
+        2 => {
+            notes.push("depth-2 chain".into());
+        }
+        _ => {
+            score -= 5;
+            notes.push(format!("depth-{depth} chain"));
+        }
+    }
+
+    // Class bonus
+    match f.class {
+        HijackClass::Missing => {
+            score += 10;
+            notes.push("no original needed".into());
+        }
+        HijackClass::Phantom => {
+            score += 5;
+        }
+        _ => {}
+    }
+
+    let grade = if score >= 65 { "HIGH" } else if score >= 40 { "MED" } else { "LOW" };
+
+    f.stealth = Some(grade.to_string());
+    f.stealth_notes = notes;
 }
 
 fn is_hijackable(class: &HijackClass) -> bool {

@@ -97,12 +97,12 @@ pub fn print_table(report: &Report) {
     println!();
 
     println!(
-        "  {:<14} {:<30} {:<8} {}",
-        "CLASS", "DLL", "SOURCE", "DETAILS"
+        "  {:<14} {:<30} {:<8} {:<8} {}",
+        "CLASS", "DLL", "SOURCE", "STEALTH", "DETAILS"
     );
     println!(
-        "  {:<14} {:<30} {:<8} {}",
-        "-----", "---", "------", "-------"
+        "  {:<14} {:<30} {:<8} {:<8} {}",
+        "-----", "---", "------", "-------", "-------"
     );
 
     for f in &hijackable {
@@ -114,21 +114,32 @@ pub fn print_table(report: &Report) {
             _ => format!("    {}", f.class),
         };
 
+        let stealth_str = f.stealth.as_deref().unwrap_or("-");
+
         let exports_tag = if !f.exports.is_empty() {
             format!(" [{} exports]", f.exports.len())
+        } else if let Some(count) = f.export_count {
+            format!(" [{count} exports]")
         } else {
             String::new()
         };
 
         println!(
-            "  {:<14} {:<30} {:<8} {}{}",
-            class_colored, f.dll_name, f.source, f.details, exports_tag
+            "  {:<14} {:<30} {:<8} {:<8} {}{}",
+            class_colored, f.dll_name, f.source, stealth_str, f.details, exports_tag
         );
 
         if f.import_chain.len() > 2 {
             println!(
                 "  {:<14} chain: {}",
                 "", f.import_chain.join(" -> ")
+            );
+        }
+
+        if !f.stealth_notes.is_empty() {
+            println!(
+                "  {:<14} stealth: {}",
+                "", f.stealth_notes.join(", ")
             );
         }
     }
@@ -152,6 +163,16 @@ pub fn print_table(report: &Report) {
     if sideload_count > 0 {
         println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in writable app dir with proxy");
     }
+    println!();
+
+    let high_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("HIGH")).count();
+    let med_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("MED")).count();
+    let low_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("LOW")).count();
+
+    println!("  Stealth grades:");
+    println!("    HIGH ({high_count}):  Low export count, not EDR-monitored - easy proxy, minimal detection risk");
+    println!("    MED  ({med_count}):  Moderate exports or minor risk factors - workable but needs care");
+    println!("    LOW  ({low_count}):  Many exports or EDR-hooked DLL - complex proxy and/or high detection risk");
     println!();
 
     // Print exports section if any findings have exports
