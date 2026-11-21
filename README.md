@@ -31,10 +31,23 @@ Automatically filters out:
 dll-hijack-hunter.exe <target.exe> [options]
 ```
 
+### OPSEC Modes
+
+Three escalation levels depending on how quiet you need to be:
+
+| Mode | Command | What it does | Noise level |
+|------|---------|-------------|-------------|
+| Local | `--local` | Read PE + check app dir only | Quietest — just file reads |
+| Static | `--static-only` | Read PE + walk full search order | Medium — probes system dirs |
+| Full | *(default)* | Static + launch process under debugger | Loudest — process creation |
+
+Use `--local` on engagements where you can't afford to touch system directories or launch processes. It only reads the target PE and checks what's present in the application directory.
+
 ### Options
 
 | Flag | Description |
 |------|-------------|
+| `--local` | OPSEC-safe: only read PE + check app dir, no system probing, no process launch |
 | `--static-only` | Only parse PE imports (no execution) |
 | `--dynamic-only` | Only run debug session |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
@@ -45,14 +58,19 @@ dll-hijack-hunter.exe <target.exe> [options]
 
 ### Examples
 
-Basic scan (static + dynamic):
+Local mode — quietest, only checks app directory:
 ```
-dll-hijack-hunter.exe C:\Program Files\SomeApp\app.exe
+dll-hijack-hunter.exe C:\Program Files\SomeApp\app.exe --local
 ```
 
-Static only (no execution, safe for unknown binaries):
+Static only (no execution, probes full search order):
 ```
 dll-hijack-hunter.exe C:\Tools\app.exe --static-only
+```
+
+Full scan (static + dynamic):
+```
+dll-hijack-hunter.exe C:\Program Files\SomeApp\app.exe
 ```
 
 Dynamic with custom timeout and arguments:
@@ -62,7 +80,7 @@ dll-hijack-hunter.exe C:\Tools\app.exe --timeout 15 --args "--config test.cfg"
 
 JSON output for scripting:
 ```
-dll-hijack-hunter.exe C:\Tools\app.exe --json
+dll-hijack-hunter.exe C:\Tools\app.exe --local --json
 ```
 
 Verbose with all DLLs:

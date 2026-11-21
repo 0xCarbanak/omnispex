@@ -237,6 +237,80 @@ pub fn classify_dll(
     }
 }
 
+pub fn classify_local(
+    dll_name: &str,
+    known_dlls: &HashSet<String>,
+    app_dir: &Path,
+    app_dir_writable: bool,
+) -> DllFinding {
+    let lower = dll_name.to_lowercase();
+
+    if is_api_set(&lower) {
+        return DllFinding {
+            dll_name: dll_name.to_string(),
+            class: HijackClass::Safe,
+            found_path: None,
+            app_dir_writable,
+            source: String::new(),
+            details: "API set — virtual, not a real DLL".into(),
+        };
+    }
+
+    if known_dlls.contains(&lower) {
+        return DllFinding {
+            dll_name: dll_name.to_string(),
+            class: HijackClass::KnownDll,
+            found_path: None,
+            app_dir_writable,
+            source: String::new(),
+            details: "Protected by KnownDLLs".into(),
+        };
+    }
+
+    let candidate = app_dir.join(&lower);
+    if candidate.exists() {
+        if app_dir_writable {
+            return DllFinding {
+                dll_name: dll_name.to_string(),
+                class: HijackClass::Sideload,
+                found_path: Some(candidate.display().to_string()),
+                app_dir_writable,
+                source: String::new(),
+                details: "Present in writable app dir — replace with proxy DLL".into(),
+            };
+        }
+        return DllFinding {
+            dll_name: dll_name.to_string(),
+            class: HijackClass::Safe,
+            found_path: Some(candidate.display().to_string()),
+            app_dir_writable,
+            source: String::new(),
+            details: "In app dir but dir is not writable".into(),
+        };
+    }
+
+    // Not in app dir — potential hijack if dir is writable
+    if app_dir_writable {
+        DllFinding {
+            dll_name: dll_name.to_string(),
+            class: HijackClass::Phantom,
+            found_path: None,
+            app_dir_writable,
+            source: String::new(),
+            details: "Not in app dir — plant here to hijack (app dir is writable)".into(),
+        }
+    } else {
+        DllFinding {
+            dll_name: dll_name.to_string(),
+            class: HijackClass::Safe,
+            found_path: None,
+            app_dir_writable,
+            source: String::new(),
+            details: "Not in app dir and dir is not writable".into(),
+        }
+    }
+}
+
 fn same_dir(a: &Path, b: &Path) -> bool {
     #[cfg(windows)]
     {
