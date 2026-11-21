@@ -1,5 +1,19 @@
 # Omnispex
 
+```
+            _..---.._            
+        _.-'  _   _  '-._       |
+      .'   .-' '-' '-.   '.    -+-
+     /   .'   .---.   '.   \    |
+  --/   /    / o o \    \   \--
+    |  ;    |  ___  |    ;  |   
+  --\   \    \_____/    /   /--
+     \   '.___________.'   /    |
+      '-.__ O M N I __.-'     -+-
+     |    S P E X    |          |
+      '--.._______..--'         
+```
+
 > *"Should it be kept focussed for an extended period of time, an Omnispex will determine the weak points of those it scrutinises and pass them on to its master."*
 
 DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, follows recursive import chains, and enumerates exports -- everything you need to find and build proxy DLL hijacks.
@@ -19,6 +33,13 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
   Target:       C:\Temp\npp\notepad++.exe
   App dir:      C:\Temp\npp
   App writable: YES
+  Architecture: x64 (GUI)
+  Signed:       YES (Notepad++)
+  Company:      Don HO don.h@free.fr
+  Description:  Notepad++
+  File version: 8.6.8
+  Product:      Notepad++
+  Original:     notepad++.exe
   Static imports:  19
 
   Found 12 hijackable DLLs:
@@ -120,6 +141,18 @@ JSON for scripting (exports included in output):
 omnispex.exe C:\Temp\npp\notepad++.exe --local --exports --json
 ```
 
+## PE Metadata
+
+The report header shows metadata parsed from the target's PE headers:
+
+- **Architecture** and subsystem (x64/x86, GUI/Console)
+- **Authenticode signature** status and signer name (extracted from embedded PKCS#7 certificate)
+- **Version info** from the PE resource section: CompanyName, FileDescription, FileVersion, ProductName, OriginalFilename
+
+This tells you at a glance what you're targeting — who signed it, what version it is, and whether it's the original binary or a renamed copy. Useful for confirming you have the right target before building a proxy DLL.
+
+Note: Windows system binaries (notepad.exe, msiexec.exe) are often catalog-signed rather than Authenticode-signed. These show `Signed: NO` because they don't have an embedded certificate — the signature lives in a separate .cat file. Version info still works for these.
+
 ## Export Enumeration
 
 `--exports` reads the PE export table of each hijackable DLL and lists every exported function with its ordinal, name, and forwarding target (if any). This is what you need to build a proxy DLL -- the exports tell you exactly what functions to forward.
@@ -207,7 +240,7 @@ Output: ~535KB standalone executable, no runtime dependencies.
 ```
 src/
   main.rs           CLI, orchestration, BFS import chain walker, batch scanner
-  pe_parser.rs      PE import/export table parsing
+  pe_parser.rs      PE import/export/metadata parsing (signature, version info)
   debugger.rs       Dynamic analysis via CreateProcessW + DEBUG_PROCESS
   search_order.rs   DLL search order walk, writability checks, classification
   known_dlls.rs     KnownDLLs registry + loader-critical DLL filtering
