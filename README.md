@@ -1,116 +1,170 @@
 # DLL Hijack Hunter
 
-Standalone tool that discovers DLL search order hijacking opportunities in Windows executables. Run it on your own machine to research which DLLs are hijackable in a target application, then use the findings to prepare your payload.
+Discovers DLL search order hijacking opportunities in Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, and follows recursive import chains to surface every hijackable DLL -- direct or transitive.
 
-**This tool is NOT meant to be deployed to a target.** You run it locally on your own PC against a copy of the application you want to hijack. The typical workflow:
+**This is an offline research tool.** You run it on your own machine against a copy of the target application, then use the findings to build your payload.
 
-1. Download or copy the target application to your machine
-2. Run the hunter against it to find hijackable DLLs
-3. Build your proxy DLL payload based on the findings
-4. Deploy the payload to the target
+## Quick Start
 
-### Use Cases
+```
+dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
+```
 
-- **Initial access** — Research which DLLs in a widely-used application can be hijacked, prepare a weaponized DLL alongside the legitimate app for phishing or USB drop
-- **Assumed compromise** — Already on a target, identify applications with hijackable DLLs for persistence or privilege escalation, then build payloads offline
+```
+  DLL HIJACK HUNTER
+  -----------------
+
+  Target:       C:\Temp\npp\notepad++.exe
+  App dir:      C:\Temp\npp
+  App writable: YES
+  Static imports:  19
+
+  Found 12 hijackable DLLs:
+
+  CLASS          DLL                            SOURCE   DETAILS
+  -----          ---                            ------   -------
+  [!] PHANTOM    dwmapi.dll                     static   Not in app dir - plant here to hijack
+  [!] PHANTOM    wintrust.dll                   static   Not in app dir - plant here to hijack
+  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack
+                 chain: notepad++.exe -> version.dll -> userenv.dll
+  [*] SIDELOAD   version.dll                    static   Present in writable app dir - replace with proxy DLL
+```
 
 ## How It Works
 
-Two analysis modes, combined by default:
+1. Parse static imports and delay-load imports from the PE header
+2. Optionally launch the target under the Debug API to capture runtime `LoadLibrary` calls
+3. For each DLL, walk the Windows DLL search order and check directory writability
+4. Follow import chains recursively (BFS) to find transitive dependencies
+5. Classify each DLL by hijack potential
 
-- **Static** — Parses PE import table and delay-load imports, checks each DLL against the Windows search order
-- **Dynamic** — Launches the target under the Windows Debug API, captures every DLL load event, analyzes actual load paths
-
-Each DLL is classified:
+### Classifications
 
 | Class | Meaning | Attack |
 |-------|---------|--------|
-| `MISSING` | DLL not found anywhere in search path | Drop your DLL in app directory |
+| `MISSING` | Not found anywhere in search path | Drop your DLL in app directory |
 | `PHANTOM` | Loaded from System32, but app dir is searched first and writable | Plant proxy DLL in app dir |
 | `WRITABLE_PATH` | Loaded from a writable PATH directory | Replace DLL in that directory |
 | `SIDELOAD` | Already in app dir, directory is writable | Replace with proxy DLL |
 | `KNOWN_DLL` | Protected by KnownDLLs registry | Not hijackable |
-| `SAFE` | Not exploitable (non-writable location, API set, etc.) | — |
+| `SAFE` | Not exploitable (non-writable location, API set, etc.) | -- |
 
-Automatically filters out:
-- KnownDLLs (read from `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs`)
-- Loader-critical DLLs (ntdll, kernelbase, ucrtbase, etc. — kernel-mapped, not hijackable)
-- API sets (api-ms-win-*, ext-ms-win-*)
+Automatically filtered: KnownDLLs (from registry), loader-critical DLLs (ntdll, kernelbase, etc.), API sets (api-ms-win-*, ext-ms-win-*).
 
 ## Usage
 
 ```
-dll-hijack-hunter.exe <target.exe> [options]
+dll-hijack-hunter.exe [target.exe] [options]
 ```
 
-### Analysis Modes
+### Modes
 
-| Mode | Command | What it does |
-|------|---------|-------------|
-| Local | `--local` | Read PE + check app dir only — fast, no process launch |
-| Static | `--static-only` | Read PE + walk full DLL search order |
-| Full | *(default)* | Static + launch process under debugger for runtime DLL capture |
+| Mode | Flag | What it does |
+|------|------|-------------|
+| Local | `--local` | PE + app dir only. Fast, no process launch, OPSEC-safe |
+| Static | `--static-only` | PE + full DLL search order walk, no execution |
+| Full | *(default)* | Static + dynamic (launches process under debugger) |
 | Batch | `--scan-dir <path>` | Scan all EXEs in a directory, rank by hijackable count |
 
 ### Options
 
 | Flag | Description |
 |------|-------------|
-| `--local` | Only read PE + check app dir, no search order walk, no process launch |
-| `--static-only` | Only parse PE imports (no execution) |
+| `--local` | Only check app directory (no search order walk, no process launch) |
+| `--static-only` | Parse PE imports + walk search order, no execution |
 | `--dynamic-only` | Only run debug session |
-| `--scan-dir <path>` | Scan all EXEs in a directory recursively (static-only, batch mode) |
+| `--scan-dir <path>` | Batch scan: find all EXEs recursively, rank results |
 | `--depth <N>` | Recursive import chain depth (default: 3) |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
 | `--args <str>` | Arguments to pass to target during dynamic analysis |
 | `--json` | Output JSON instead of table |
-| `--show-all` | Show all DLLs including non-hijackable |
-| `-v, --verbose` | Show DLL search order and per-module details |
+| `--show-all` | Include non-hijackable DLLs in output |
+| `-v, --verbose` | Show search order, chain walk progress, per-module details |
 
 ### Examples
 
-Quick local check — just reads the PE and checks app directory:
+Local check (fast, reads PE + app dir only):
 ```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --local
-```
-
-Full scan with dynamic analysis:
-```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --timeout 15
+dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
 ```
 
-Static only — no process execution:
+Full analysis with dynamic tracing:
 ```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --static-only
-```
-
-JSON output for scripting:
-```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --json
+dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --timeout 15
 ```
 
-Verbose with all DLLs listed:
+Deep import chain walk (5 levels):
 ```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe -v --show-all
-```
-
-Batch scan a directory for all hijackable EXEs:
-```
-dll-hijack-hunter.exe --scan-dir C:\Program Files\SomeVendor --local
+dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local --depth 5 -v
 ```
 
-Deep import chain analysis (follow DLL dependencies 5 levels deep):
+Batch scan an entire program directory:
 ```
-dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --local --depth 5 -v
+dll-hijack-hunter.exe --scan-dir "C:\Program Files\SomeVendor" --local
 ```
 
-### Batch Scan
+JSON for scripting:
+```
+dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local --json
+```
 
-`--scan-dir` recursively finds all `.exe` files in a directory (up to 10 levels deep), runs static + local analysis on each, and outputs a ranked summary table sorted by number of hijackable DLLs. Useful for quickly triaging which applications in a target environment have the most hijacking surface.
+## Batch Scan
 
-### Recursive Import Chains
+`--scan-dir` recursively finds all `.exe` files (up to 10 levels deep), runs static analysis on each, and outputs a ranked table:
 
-`--depth` controls how deep the tool follows DLL import chains beyond the target EXE's direct imports. At depth 1, only the EXE's own imports are checked. At depth 3 (default), the tool also parses imports of those DLLs, and their imports, using BFS to find the shortest chain from the EXE to each discovered DLL. Findings from deep chains show the full path (e.g. `exe -> a.dll -> b.dll -> vuln.dll`).
+```
+  DLL HIJACK HUNTER - BATCH SCAN
+  ------------------------------
+
+  Scan dir:           C:\Temp\npp
+  Total executables:  2
+  With findings:      2
+
+  RANK  BEST CLASS     HITS  CHAIN TARGET
+  ----  ----------     ----  ----- ------
+  1     PHANTOM        12    yes   C:\Temp\npp\notepad++.exe
+                             crypt32.dll (PHANTOM)
+                             wintrust.dll (PHANTOM)
+                             comctl32.dll (PHANTOM)
+                             bcrypt.dll (PHANTOM)
+                             dwmapi.dll (PHANTOM)
+  2     PHANTOM        4     yes   C:\Temp\npp\updater\GUP.exe
+                             bcrypt.dll (PHANTOM)
+                             crypt32.dll (PHANTOM)
+                             comctl32.dll (PHANTOM)
+                             libcurl.dll (SIDELOAD)
+```
+
+Sorts by hijackable count descending, shows the top 5 DLLs per target. Use this to quickly triage which applications in an environment have the most hijacking surface.
+
+## Recursive Import Chains
+
+`--depth` controls how deep the tool follows DLL dependencies beyond the target's direct imports. The default depth of 3 catches most practical chains.
+
+At depth 1, only the EXE's own imports are checked. At higher depths, the tool reads the PE of each resolved DLL and walks its imports too, using BFS to find the shortest path from the EXE to each discovered DLL:
+
+```
+  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack
+                 chain: notepad++.exe -> version.dll -> userenv.dll
+  [!] PHANTOM    bcrypt.dll                     static   Not in app dir - plant here to hijack
+                 chain: notepad++.exe -> version.dll -> bcrypt.dll
+```
+
+This surfaces DLLs that aren't direct imports of the target but are loaded transitively through its dependencies. A PHANTOM DLL three levels deep is still plantable in the app directory if it's writable.
+
+Only DLLs resolvable on disk are followed -- KnownDLLs and API sets are skipped since they can't be hijacked and the OS doesn't load them from the filesystem search path.
+
+## DLL Search Order
+
+The tool walks the standard Windows search order (SafeDllSearchMode enabled):
+
+1. Application directory
+2. System directory (System32)
+3. Windows directory
+4. Current working directory
+5. PATH directories
+
+For each DLL, it finds the first directory in this order where the DLL exists, checks if the application directory (searched first) is writable, and classifies accordingly.
 
 ## Building
 
@@ -124,36 +178,22 @@ Build on Windows:
 cargo build --release
 ```
 
-Output: `target/x86_64-pc-windows-gnu/release/dll-hijack-hunter.exe` (~500KB)
+Output: ~535KB standalone executable, no runtime dependencies.
 
 ## Architecture
 
 ```
 src/
-  main.rs           CLI and orchestration
+  main.rs           CLI, orchestration, BFS import chain walker, batch scanner
   pe_parser.rs      PE import table + delay-load parsing
   debugger.rs       Dynamic analysis via CreateProcessW + DEBUG_PROCESS
-  search_order.rs   DLL search order walk + writability checks + classification
+  search_order.rs   DLL search order walk, writability checks, classification
   known_dlls.rs     KnownDLLs registry + loader-critical DLL filtering
-  report.rs         Table and JSON output
+  report.rs         Table, JSON, and batch output formatting
 ```
-
-### DLL Search Order (SafeDllSearchMode)
-
-The tool walks the standard Windows DLL search order:
-
-1. Application directory
-2. System directory (System32)
-3. Windows directory
-4. Current working directory
-5. PATH directories
-
-For each DLL found in the PE imports or observed at runtime, it checks where the DLL exists in this order and whether those directories are writable.
-
-### Static vs Dynamic
 
 **Static analysis** reads the PE import table and delay-load directory directly from the binary. Finds all DLLs declared as dependencies without executing anything.
 
-**Dynamic analysis** launches the target under `DEBUG_PROCESS` and captures `LOAD_DLL_DEBUG_EVENT` messages. Catches DLLs loaded at runtime via `LoadLibrary` — plugins, COM objects, delay-loaded dependencies, etc. The process is terminated after the timeout.
+**Dynamic analysis** launches the target under `DEBUG_PROCESS` and captures `LOAD_DLL_DEBUG_EVENT` messages. Catches DLLs loaded at runtime via `LoadLibrary` -- plugins, COM objects, delay-loaded dependencies, etc. The process is terminated after the timeout.
 
 Combined mode runs both and merges results, tagging each finding with its source (`static`, `dynamic`, or `both`).
