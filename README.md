@@ -1,6 +1,18 @@
 # DLL Hijack Hunter
 
-Standalone Windows tool that discovers DLL search order hijacking opportunities for a target executable. Combines static PE analysis with dynamic runtime monitoring to find hijackable DLLs.
+Standalone tool that discovers DLL search order hijacking opportunities in Windows executables. Run it on your own machine to research which DLLs are hijackable in a target application, then use the findings to prepare your payload.
+
+**This tool is NOT meant to be deployed to a target.** You run it locally on your own PC against a copy of the application you want to hijack. The typical workflow:
+
+1. Download or copy the target application to your machine
+2. Run the hunter against it to find hijackable DLLs
+3. Build your proxy DLL payload based on the findings
+4. Deploy the payload to the target
+
+### Use Cases
+
+- **Initial access** — Research which DLLs in a widely-used application can be hijacked, prepare a weaponized DLL alongside the legitimate app for phishing or USB drop
+- **Assumed compromise** — Already on a target, identify applications with hijackable DLLs for persistence or privilege escalation, then build payloads offline
 
 ## How It Works
 
@@ -31,23 +43,19 @@ Automatically filters out:
 dll-hijack-hunter.exe <target.exe> [options]
 ```
 
-### OPSEC Modes
+### Analysis Modes
 
-Three escalation levels depending on how quiet you need to be:
-
-| Mode | Command | What it does | Noise level |
-|------|---------|-------------|-------------|
-| Local | `--local` | Read PE + check app dir only | Quietest — just file reads |
-| Static | `--static-only` | Read PE + walk full search order | Medium — probes system dirs |
-| Full | *(default)* | Static + launch process under debugger | Loudest — process creation |
-
-Use `--local` on engagements where you can't afford to touch system directories or launch processes. It only reads the target PE and checks what's present in the application directory.
+| Mode | Command | What it does |
+|------|---------|-------------|
+| Local | `--local` | Read PE + check app dir only — fast, no process launch |
+| Static | `--static-only` | Read PE + walk full DLL search order |
+| Full | *(default)* | Static + launch process under debugger for runtime DLL capture |
 
 ### Options
 
 | Flag | Description |
 |------|-------------|
-| `--local` | OPSEC-safe: only read PE + check app dir, no system probing, no process launch |
+| `--local` | Only read PE + check app dir, no search order walk, no process launch |
 | `--static-only` | Only parse PE imports (no execution) |
 | `--dynamic-only` | Only run debug session |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
@@ -58,34 +66,29 @@ Use `--local` on engagements where you can't afford to touch system directories 
 
 ### Examples
 
-Local mode — quietest, only checks app directory:
+Quick local check — just reads the PE and checks app directory:
 ```
-dll-hijack-hunter.exe C:\Program Files\SomeApp\app.exe --local
-```
-
-Static only (no execution, probes full search order):
-```
-dll-hijack-hunter.exe C:\Tools\app.exe --static-only
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --local
 ```
 
-Full scan (static + dynamic):
+Full scan with dynamic analysis:
 ```
-dll-hijack-hunter.exe C:\Program Files\SomeApp\app.exe
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --timeout 15
 ```
 
-Dynamic with custom timeout and arguments:
+Static only — no process execution:
 ```
-dll-hijack-hunter.exe C:\Tools\app.exe --timeout 15 --args "--config test.cfg"
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --static-only
 ```
 
 JSON output for scripting:
 ```
-dll-hijack-hunter.exe C:\Tools\app.exe --local --json
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --json
 ```
 
-Verbose with all DLLs:
+Verbose with all DLLs listed:
 ```
-dll-hijack-hunter.exe C:\Tools\app.exe -v --show-all
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe -v --show-all
 ```
 
 ## Building
@@ -128,8 +131,8 @@ For each DLL found in the PE imports or observed at runtime, it checks where the
 
 ### Static vs Dynamic
 
-**Static analysis** reads the PE import table and delay-load directory directly from the binary. This finds all DLLs declared as dependencies without executing the target. Good for unknown or potentially malicious binaries.
+**Static analysis** reads the PE import table and delay-load directory directly from the binary. Finds all DLLs declared as dependencies without executing anything.
 
-**Dynamic analysis** launches the target under `DEBUG_PROCESS` and captures `LOAD_DLL_DEBUG_EVENT` messages. This catches DLLs loaded at runtime via `LoadLibrary` calls that aren't in the import table — plugins, COM objects, delay-loaded dependencies that actually get triggered, etc. The process is terminated after the timeout.
+**Dynamic analysis** launches the target under `DEBUG_PROCESS` and captures `LOAD_DLL_DEBUG_EVENT` messages. Catches DLLs loaded at runtime via `LoadLibrary` — plugins, COM objects, delay-loaded dependencies, etc. The process is terminated after the timeout.
 
 Combined mode runs both and merges results, tagging each finding with its source (`static`, `dynamic`, or `both`).
