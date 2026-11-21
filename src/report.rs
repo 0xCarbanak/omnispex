@@ -32,8 +32,8 @@ pub struct BatchReport {
 
 pub fn print_table(report: &Report) {
     println!();
-    println!("  DLL HIJACK HUNTER");
-    println!("  -----------------");
+    println!("  OMNISPEX");
+    println!("  --------");
     println!();
     println!("  Target:       {}", report.target);
     println!("  App dir:      {}", report.app_dir);
@@ -85,9 +85,15 @@ pub fn print_table(report: &Report) {
             _ => format!("    {}", f.class),
         };
 
+        let exports_tag = if !f.exports.is_empty() {
+            format!(" [{} exports]", f.exports.len())
+        } else {
+            String::new()
+        };
+
         println!(
-            "  {:<14} {:<30} {:<8} {}",
-            class_colored, f.dll_name, f.source, f.details
+            "  {:<14} {:<30} {:<8} {}{}",
+            class_colored, f.dll_name, f.source, f.details, exports_tag
         );
 
         if f.import_chain.len() > 2 {
@@ -118,6 +124,36 @@ pub fn print_table(report: &Report) {
         println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in writable app dir with proxy");
     }
     println!();
+
+    // Print exports section if any findings have exports
+    let with_exports: Vec<&&DllFinding> = hijackable.iter()
+        .filter(|f| !f.exports.is_empty())
+        .collect();
+    if !with_exports.is_empty() {
+        println!("  Exports (for proxy DLL generation):");
+        println!("  -----------------------------------");
+        for f in with_exports {
+            let ordinal_only = f.exports.iter()
+                .filter(|e| e.name.is_none())
+                .count();
+            let forwarded = f.exports.iter()
+                .filter(|e| e.forward.is_some())
+                .count();
+
+            println!();
+            println!("  {} ({} exports, {} by ordinal only, {} forwarded):",
+                f.dll_name, f.exports.len(), ordinal_only, forwarded);
+
+            for exp in &f.exports {
+                let name_str = exp.name.as_deref().unwrap_or("(ordinal only)");
+                let fwd_str = exp.forward.as_ref()
+                    .map(|fw| format!(" -> {fw}"))
+                    .unwrap_or_default();
+                println!("    @{:<5} {}{}", exp.ordinal, name_str, fwd_str);
+            }
+        }
+        println!();
+    }
 }
 
 pub fn print_all(report: &Report) {
@@ -164,8 +200,8 @@ pub fn print_json(report: &Report) {
 
 pub fn print_batch_table(report: &BatchReport) {
     println!();
-    println!("  DLL HIJACK HUNTER - BATCH SCAN");
-    println!("  ------------------------------");
+    println!("  OMNISPEX - BATCH SCAN");
+    println!("  ---------------------");
     println!();
     println!("  Scan dir:           {}", report.scan_dir);
     println!("  Total executables:  {}", report.total_exes);

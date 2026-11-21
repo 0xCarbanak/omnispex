@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
-    name = "dll-hijack-hunter",
-    about = "Discover DLL hijacking opportunities for a target executable"
+    name = "omnispex",
+    about = "Reveal DLL hijacking opportunities in Windows executables"
 )]
 struct Args {
     /// Target executable to analyze (optional if --scan-dir is used)
@@ -38,6 +38,10 @@ struct Args {
     /// Recursive import chain depth (default: 3)
     #[arg(long, default_value = "3")]
     depth: usize,
+
+    /// Show exports of hijackable DLLs (needed for proxy DLL generation)
+    #[arg(long)]
+    exports: bool,
 
     /// Dynamic analysis timeout in seconds
     #[arg(long, default_value = "30")]
@@ -250,6 +254,16 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             }
         }
 
+        if args.exports && is_hijackable(&f.class) {
+            if let Some(ref path) = f.found_path {
+                if let Ok(dll_data) = std::fs::read(path) {
+                    if let Ok(pe_exports) = pe_parser::parse_exports(&dll_data) {
+                        f.exports = pe_exports.functions;
+                    }
+                }
+            }
+        }
+
         findings.push(f);
     }
 
@@ -270,6 +284,12 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         dynamic_loads: dynamic_count,
         findings,
     }
+}
+
+fn is_hijackable(class: &HijackClass) -> bool {
+    matches!(class,
+        HijackClass::Missing | HijackClass::Phantom |
+        HijackClass::WritablePath | HijackClass::Sideload)
 }
 
 fn walk_import_chain(
@@ -364,6 +384,7 @@ fn run_batch(args: &Args) {
         static_only: true,
         dynamic_only: false,
         depth: args.depth,
+        exports: false,
         timeout: 0,
         args: None,
         json: args.json,
@@ -381,9 +402,7 @@ fn run_batch(args: &Args) {
         let r = analyze_target(exe, &batch_args);
 
         let hijackable: Vec<&DllFinding> = r.findings.iter()
-            .filter(|f| matches!(f.class,
-                HijackClass::Missing | HijackClass::Phantom |
-                HijackClass::WritablePath | HijackClass::Sideload))
+            .filter(|f| is_hijackable(&f.class))
             .collect();
 
         if hijackable.is_empty() && !args.show_all {

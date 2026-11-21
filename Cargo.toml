@@ -1,10 +1,10 @@
 [package]
-name = "dll-hijack-hunter"
-version = "0.1.0"
+name = "omnispex"
+version = "1.0.0"
 edition = "2021"
 
 [[bin]]
-name = "dll-hijack-hunter"
+name = "omnispex"
 path = "src/main.rs"
 
 [dependencies]

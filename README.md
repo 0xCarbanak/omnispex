@@ -1,18 +1,20 @@
-# DLL Hijack Hunter
+# Omnispex
 
-Discovers DLL search order hijacking opportunities in Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, and follows recursive import chains to surface every hijackable DLL -- direct or transitive.
+> *"Should it be kept focussed for an extended period of time, an Omnispex will determine the weak points of those it scrutinises and pass them on to its master."*
 
-**This is an offline research tool.** You run it on your own machine against a copy of the target application, then use the findings to build your payload.
+DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, follows recursive import chains, and enumerates exports -- everything you need to find and build proxy DLL hijacks.
+
+**This is an offline research tool.** Run it on your own machine against a copy of the target application, then use the findings to build your payload.
 
 ## Quick Start
 
 ```
-dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
+omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 ```
 
 ```
-  DLL HIJACK HUNTER
-  -----------------
+  OMNISPEX
+  --------
 
   Target:       C:\Temp\npp\notepad++.exe
   App dir:      C:\Temp\npp
@@ -23,11 +25,19 @@ dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
 
   CLASS          DLL                            SOURCE   DETAILS
   -----          ---                            ------   -------
-  [!] PHANTOM    dwmapi.dll                     static   Not in app dir - plant here to hijack
-  [!] PHANTOM    wintrust.dll                   static   Not in app dir - plant here to hijack
-  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack
+  [!] PHANTOM    dwmapi.dll                     static   Not in app dir - plant here to hijack [14 exports]
+  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack [28 exports]
                  chain: notepad++.exe -> version.dll -> userenv.dll
-  [*] SIDELOAD   version.dll                    static   Present in writable app dir - replace with proxy DLL
+  [*] SIDELOAD   version.dll                    static   Present in writable app dir [12 exports]
+
+  Exports (for proxy DLL generation):
+  -----------------------------------
+
+  version.dll (12 exports, 0 by ordinal only, 0 forwarded):
+    @1     GetFileVersionInfoA
+    @2     GetFileVersionInfoByHandle
+    @3     GetFileVersionInfoExA
+    ...
 ```
 
 ## How It Works
@@ -37,6 +47,7 @@ dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
 3. For each DLL, walk the Windows DLL search order and check directory writability
 4. Follow import chains recursively (BFS) to find transitive dependencies
 5. Classify each DLL by hijack potential
+6. With `--exports`, read the PE export table of each hijackable DLL
 
 ### Classifications
 
@@ -54,7 +65,7 @@ Automatically filtered: KnownDLLs (from registry), loader-critical DLLs (ntdll, 
 ## Usage
 
 ```
-dll-hijack-hunter.exe [target.exe] [options]
+omnispex.exe [target.exe] [options]
 ```
 
 ### Modes
@@ -75,6 +86,7 @@ dll-hijack-hunter.exe [target.exe] [options]
 | `--dynamic-only` | Only run debug session |
 | `--scan-dir <path>` | Batch scan: find all EXEs recursively, rank results |
 | `--depth <N>` | Recursive import chain depth (default: 3) |
+| `--exports` | Show exports of hijackable DLLs (for proxy DLL generation) |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
 | `--args <str>` | Arguments to pass to target during dynamic analysis |
 | `--json` | Output JSON instead of table |
@@ -83,38 +95,48 @@ dll-hijack-hunter.exe [target.exe] [options]
 
 ### Examples
 
-Local check (fast, reads PE + app dir only):
+Local check with export enumeration:
 ```
-dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local
+omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 ```
 
 Full analysis with dynamic tracing:
 ```
-dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --timeout 15
+omnispex.exe C:\Temp\npp\notepad++.exe --timeout 15
 ```
 
 Deep import chain walk (5 levels):
 ```
-dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local --depth 5 -v
+omnispex.exe C:\Temp\npp\notepad++.exe --local --depth 5 -v
 ```
 
 Batch scan an entire program directory:
 ```
-dll-hijack-hunter.exe --scan-dir "C:\Program Files\SomeVendor" --local
+omnispex.exe --scan-dir "C:\Program Files\SomeVendor" --local
 ```
 
-JSON for scripting:
+JSON for scripting (exports included in output):
 ```
-dll-hijack-hunter.exe C:\Temp\npp\notepad++.exe --local --json
+omnispex.exe C:\Temp\npp\notepad++.exe --local --exports --json
 ```
+
+## Export Enumeration
+
+`--exports` reads the PE export table of each hijackable DLL and lists every exported function with its ordinal, name, and forwarding target (if any). This is what you need to build a proxy DLL -- the exports tell you exactly what functions to forward.
+
+For each DLL the tool shows:
+- Total export count, ordinal-only exports, and forwarded exports
+- Every function: ordinal number, name (or "ordinal only"), and forward target
+
+The export data is also included in `--json` output, making it easy to feed into proxy DLL generators or C2 builders that need the export list.
 
 ## Batch Scan
 
 `--scan-dir` recursively finds all `.exe` files (up to 10 levels deep), runs static analysis on each, and outputs a ranked table:
 
 ```
-  DLL HIJACK HUNTER - BATCH SCAN
-  ------------------------------
+  OMNISPEX - BATCH SCAN
+  ---------------------
 
   Scan dir:           C:\Temp\npp
   Total executables:  2
@@ -185,15 +207,9 @@ Output: ~535KB standalone executable, no runtime dependencies.
 ```
 src/
   main.rs           CLI, orchestration, BFS import chain walker, batch scanner
-  pe_parser.rs      PE import table + delay-load parsing
+  pe_parser.rs      PE import/export table parsing
   debugger.rs       Dynamic analysis via CreateProcessW + DEBUG_PROCESS
   search_order.rs   DLL search order walk, writability checks, classification
   known_dlls.rs     KnownDLLs registry + loader-critical DLL filtering
   report.rs         Table, JSON, and batch output formatting
 ```
-
-**Static analysis** reads the PE import table and delay-load directory directly from the binary. Finds all DLLs declared as dependencies without executing anything.
-
-**Dynamic analysis** launches the target under `DEBUG_PROCESS` and captures `LOAD_DLL_DEBUG_EVENT` messages. Catches DLLs loaded at runtime via `LoadLibrary` -- plugins, COM objects, delay-loaded dependencies, etc. The process is terminated after the timeout.
-
-Combined mode runs both and merges results, tagging each finding with its source (`static`, `dynamic`, or `both`).
