@@ -50,6 +50,7 @@ dll-hijack-hunter.exe <target.exe> [options]
 | Local | `--local` | Read PE + check app dir only — fast, no process launch |
 | Static | `--static-only` | Read PE + walk full DLL search order |
 | Full | *(default)* | Static + launch process under debugger for runtime DLL capture |
+| Batch | `--scan-dir <path>` | Scan all EXEs in a directory, rank by hijackable count |
 
 ### Options
 
@@ -58,6 +59,8 @@ dll-hijack-hunter.exe <target.exe> [options]
 | `--local` | Only read PE + check app dir, no search order walk, no process launch |
 | `--static-only` | Only parse PE imports (no execution) |
 | `--dynamic-only` | Only run debug session |
+| `--scan-dir <path>` | Scan all EXEs in a directory recursively (static-only, batch mode) |
+| `--depth <N>` | Recursive import chain depth (default: 3) |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
 | `--args <str>` | Arguments to pass to target during dynamic analysis |
 | `--json` | Output JSON instead of table |
@@ -90,6 +93,24 @@ Verbose with all DLLs listed:
 ```
 dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe -v --show-all
 ```
+
+Batch scan a directory for all hijackable EXEs:
+```
+dll-hijack-hunter.exe --scan-dir C:\Program Files\SomeVendor --local
+```
+
+Deep import chain analysis (follow DLL dependencies 5 levels deep):
+```
+dll-hijack-hunter.exe C:\Tools\SomeApp\app.exe --local --depth 5 -v
+```
+
+### Batch Scan
+
+`--scan-dir` recursively finds all `.exe` files in a directory (up to 10 levels deep), runs static + local analysis on each, and outputs a ranked summary table sorted by number of hijackable DLLs. Useful for quickly triaging which applications in a target environment have the most hijacking surface.
+
+### Recursive Import Chains
+
+`--depth` controls how deep the tool follows DLL import chains beyond the target EXE's direct imports. At depth 1, only the EXE's own imports are checked. At depth 3 (default), the tool also parses imports of those DLLs, and their imports, using BFS to find the shortest chain from the EXE to each discovered DLL. Findings from deep chains show the full path (e.g. `exe -> a.dll -> b.dll -> vuln.dll`).
 
 ## Building
 
