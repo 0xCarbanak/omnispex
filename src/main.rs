@@ -109,6 +109,9 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let app_dir_writable = is_dir_writable(app_dir);
     let local_mode = args.local;
 
+    let pe_info = std::fs::read(target_path).ok()
+        .and_then(|data| pe_parser::parse_info(&data).ok());
+
     let mut known_dlls = known_dlls::load_known_dlls();
     known_dlls.extend(known_dlls::loader_critical_dlls());
 
@@ -282,6 +285,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         app_dir_writable,
         static_imports: static_count,
         dynamic_loads: dynamic_count,
+        pe_info,
         findings,
     }
 }

@@ -1,3 +1,4 @@
+use crate::pe_parser::PeInfo;
 use crate::search_order::{DllFinding, HijackClass};
 
 #[derive(serde::Serialize)]
@@ -7,6 +8,8 @@ pub struct Report {
     pub app_dir_writable: bool,
     pub static_imports: usize,
     pub dynamic_loads: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pe_info: Option<PeInfo>,
     pub findings: Vec<DllFinding>,
 }
 
@@ -38,6 +41,32 @@ pub fn print_table(report: &Report) {
     println!("  Target:       {}", report.target);
     println!("  App dir:      {}", report.app_dir);
     println!("  App writable: {}", if report.app_dir_writable { "YES" } else { "no" });
+
+    if let Some(ref info) = report.pe_info {
+        println!("  Architecture: {} ({})", info.arch, info.subsystem);
+        if info.is_signed {
+            let signer = info.signer.as_deref().unwrap_or("unknown signer");
+            println!("  Signed:       YES ({})", signer);
+        } else {
+            println!("  Signed:       NO");
+        }
+        if let Some(ref company) = info.company {
+            println!("  Company:      {}", company);
+        }
+        if let Some(ref desc) = info.description {
+            println!("  Description:  {}", desc);
+        }
+        if let Some(ref ver) = info.file_version {
+            println!("  File version: {}", ver);
+        }
+        if let Some(ref product) = info.product_name {
+            println!("  Product:      {}", product);
+        }
+        if let Some(ref orig) = info.original_filename {
+            println!("  Original:     {}", orig);
+        }
+    }
+
     println!("  Static imports:  {}", report.static_imports);
     println!("  Dynamic loads:   {}", report.dynamic_loads);
     println!();
