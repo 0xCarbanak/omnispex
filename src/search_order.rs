@@ -34,6 +34,8 @@ pub struct DllFinding {
     pub details: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub import_chain: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<crate::pe_parser::ExportEntry>,
 }
 
 pub fn resolve_dll_path(
@@ -154,6 +156,7 @@ fn finding(
         source: String::new(),
         details,
         import_chain: Vec::new(),
+        exports: Vec::new(),
     }
 }
 
