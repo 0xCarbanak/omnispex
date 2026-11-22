@@ -64,6 +64,15 @@ struct Args {
     verbose: bool,
 }
 
+fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix("\\\\?\\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -85,7 +94,7 @@ fn run_single(target: &str, args: &Args) {
     }
 
     let target_path = match target_path.canonicalize() {
-        Ok(p) => p,
+        Ok(p) => strip_unc_prefix(p),
         Err(e) => {
             eprintln!("  [!] Can't resolve path: {e}");
             std::process::exit(1);
@@ -248,7 +257,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let mut findings: Vec<DllFinding> = Vec::new();
 
     for dll_name in &all_dlls {
-        if is_api_set(dll_name) && !args.show_all {
+        if (is_api_set(dll_name) || search_order::is_noise_dll(dll_name)) && !args.show_all {
             continue;
         }
 
