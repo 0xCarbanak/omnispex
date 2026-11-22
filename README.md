@@ -1,18 +1,6 @@
 # Omnispex
 
-```
-            _..---.._            
-        _.-'  _   _  '-._       |
-      .'   .-' '-' '-.   '.    -+-
-     /   .'   .---.   '.   \    |
-  --/   /    / o o \    \   \--
-    |  ;    |  ___  |    ;  |   
-  --\   \    \_____/    /   /--
-     \   '.___________.'   /    |
-      '-.__ O M N I __.-'     -+-
-     |    S P E X    |          |
-      '--.._______..--'         
-```
+<img width="1672" height="941" alt="image" src="https://github.com/user-attachments/assets/f8a1e42d-5b3b-446e-ac8f-80f88a6f5dd9" />
 
 > *"Should it be kept focussed for an extended period of time, an Omnispex will determine the weak points of those it scrutinises and pass them on to its master."*
 
