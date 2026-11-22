@@ -35,8 +35,8 @@ struct Args {
     #[arg(long)]
     dynamic_only: bool,
 
-    /// Recursive import chain depth (default: 3)
-    #[arg(long, default_value = "3")]
+    /// Recursive import chain depth (default: 1 = direct imports only)
+    #[arg(long, default_value = "1")]
     depth: usize,
 
     /// Show exports of hijackable DLLs (needed for proxy DLL generation)
@@ -90,6 +90,19 @@ fn run_single(target: &str, args: &Args) {
             eprintln!("  [!] Can't resolve path: {e}");
             std::process::exit(1);
         }
+    };
+
+    // If the target is a directory, find .exe files inside it
+    let target_path = if target_path.is_dir() {
+        match find_exe_in_dir(&target_path) {
+            Some(exe) => exe,
+            None => {
+                eprintln!("  [!] No .exe files found in: {}", target_path.display());
+                std::process::exit(1);
+            }
+        }
+    } else {
+        target_path
     };
 
     let r = analyze_target(&target_path, args);
@@ -576,6 +589,90 @@ fn run_batch(args: &Args) {
         eprintln!();
         report::print_batch_table(&batch);
     }
+}
+
+/// When the user points at a directory instead of an .exe, find the right
+/// executable inside it.  Rules:
+///   1. Collect all .exe files in the top level of the directory (not recursive).
+///   2. If exactly one, use it.
+///   3. If multiple, prefer the one whose stem matches the directory name
+///      (e.g. `notepad++.exe` inside `npp.8.6.8.portable.x64/` won't match,
+///       but `npp.exe` inside `npp/` would).
+///   4. Failing that, pick the largest .exe (most likely the main application).
+fn find_exe_in_dir(dir: &Path) -> Option<PathBuf> {
+    let entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .map(|ext| ext.to_string_lossy().to_lowercase() == "exe")
+                        .unwrap_or(false)
+            })
+            .collect(),
+        Err(_) => return None,
+    };
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    if entries.len() == 1 {
+        eprintln!("  [*] Directory target - found: {}", entries[0].display());
+        return Some(entries[0].clone());
+    }
+
+    // Multiple .exe files - try to match directory name
+    let dir_stem = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    if !dir_stem.is_empty() {
+        for exe in &entries {
+            let exe_stem = exe
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if exe_stem == dir_stem {
+                eprintln!(
+                    "  [*] Directory target ({} .exe files) - matched by name: {}",
+                    entries.len(),
+                    exe.display()
+                );
+                return Some(exe.clone());
+            }
+        }
+    }
+
+    // No name match - pick the largest .exe
+    let largest = entries
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok().map(|m| (p, m.len())))
+        .max_by_key(|(_, size)| *size)
+        .map(|(p, _)| p.clone());
+
+    if let Some(ref exe) = largest {
+        eprintln!(
+            "  [*] Directory target ({} .exe files) - selected largest: {}",
+            entries.len(),
+            exe.display()
+        );
+
+        // List the other options so the user knows
+        eprintln!("       Other .exe files in directory:");
+        for e in &entries {
+            if e != exe {
+                let size = std::fs::metadata(e)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                eprintln!("         {} ({} bytes)", e.display(), size);
+            }
+        }
+    }
+
+    largest
 }
 
 fn find_exes(dir: &Path) -> Vec<PathBuf> {
