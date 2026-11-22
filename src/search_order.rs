@@ -132,6 +132,23 @@ pub fn is_api_set(name: &str) -> bool {
         || lower.starts_with("api-ms-onecoreuap-")
 }
 
+pub fn is_noise_dll(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    // Windows hotpatch stub DLLs — internal update mechanism, not hijackable
+    if lower.ends_with("_hotpatch.dll") {
+        return true;
+    }
+    // NVIDIA GPU driver internals — machine-specific, not useful targets
+    if (lower.starts_with("nv") && !lower.starts_with("nvapi"))
+        && (lower.contains("wgf") || lower.contains("ldumd") || lower.contains("gpucomp")
+            || lower.contains("memmap") || lower.contains("spcap") || lower.contains("optimus")
+            || lower.contains("cuda") || lower.contains("encode") || lower.contains("fbc"))
+    {
+        return true;
+    }
+    false
+}
+
 fn finding(
     dll_name: &str,
     class: HijackClass,
