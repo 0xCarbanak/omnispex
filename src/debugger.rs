@@ -47,10 +47,18 @@ pub fn run_debug_session(
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_secs);
     let mut event: DEBUG_EVENT = unsafe { std::mem::zeroed() };
+    let mut last_reported_sec = timeout_secs + 1;
 
     loop {
         if start.elapsed() > timeout {
             break;
+        }
+
+        let remaining = timeout.saturating_sub(start.elapsed()).as_secs();
+        if remaining < last_reported_sec {
+            last_reported_sec = remaining;
+            eprint!("  [*] Capturing DLL loads... {} DLLs found, {}s remaining\r",
+                dlls.len(), remaining);
         }
 
         let wait_ms = timeout
@@ -61,11 +69,9 @@ pub fn run_debug_session(
 
         let got = unsafe { WaitForDebugEvent(&mut event, wait_ms) };
         if got == 0 {
-            // Timeout on wait — check if process still alive
             let mut exit_code: u32 = 0;
             if unsafe { GetExitCodeProcess(pi.hProcess, &mut exit_code) } != 0
                 && exit_code != 259
-            // STILL_ACTIVE
             {
                 break;
             }
@@ -115,6 +121,8 @@ pub fn run_debug_session(
             ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
         }
     }
+
+    eprintln!("  [*] Dynamic analysis complete: {} DLLs captured              ", dlls.len());
 
     // Terminate if still running
     unsafe {
