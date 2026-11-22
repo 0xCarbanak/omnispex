@@ -108,8 +108,15 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let app_dir = target_path.parent().unwrap_or(Path::new("."));
     let local_mode = args.local;
 
-    let pe_info = std::fs::read(target_path).ok()
-        .and_then(|data| pe_parser::parse_info(&data).ok());
+    let target_data = std::fs::read(target_path).ok();
+    let pe_info = target_data.as_ref()
+        .and_then(|data| pe_parser::parse_info(data).ok());
+
+    let manifest = target_data.as_ref()
+        .and_then(|data| pe_parser::parse_manifest(data));
+    let sxs_dlls = manifest.as_ref()
+        .map(|m| pe_parser::sxs_redirected_dlls(m))
+        .unwrap_or_default();
 
     let mut known_dlls = known_dlls::load_known_dlls();
     known_dlls.extend(known_dlls::loader_critical_dlls());
@@ -263,6 +270,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
 
         if is_hijackable(&f.class) {
             f.is_delay_load = delay_load_dlls.contains(dll_name);
+            f.sxs_redirected = sxs_dlls.contains(&dll_name.to_lowercase());
 
             // Resolve the DLL file to read exports from.
             // For PHANTOM in --local mode, found_path is None because we only
@@ -371,6 +379,12 @@ fn compute_stealth(f: &mut DllFinding) {
     if EDR_WATCHED.contains(&lower.as_str()) {
         score -= 30;
         notes.push("EDR-watched".into());
+    }
+
+    // SxS manifest redirect — DLL loads from WinSxS, not app dir
+    if f.sxs_redirected {
+        score -= 40;
+        notes.push("SxS-redirected (manifest overrides search order)".into());
     }
 
     // Chain depth — direct imports are simpler to exploit

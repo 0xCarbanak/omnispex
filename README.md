@@ -144,11 +144,25 @@ Each hijackable DLL gets a stealth grade (HIGH / MED / LOW) based on how practic
 |--------|--------|-----|
 | Export count | Fewer = higher | Proxy DLL with 3 forwards is trivial; 300+ is fragile and slow to build |
 | EDR-watched | Penalty | crypt32, wintrust, bcrypt, ncrypt, wininet, winhttp, urlmon, amsi, dbghelp, ws2_32, dnsapi are heavily hooked by EDR products |
+| SxS-redirected | Heavy penalty | App manifest declares SxS assembly dependency that overrides DLL search order -- loader resolves from WinSxS, not app dir |
 | Delay-load | Bonus | Loaded lazily -- less likely to crash the app if the proxy has issues |
 | Chain depth | Direct > deep | Direct imports load reliably; depth-3+ chains are more fragile |
 | Class | MISSING > PHANTOM | MISSING = no original to deal with; PHANTOM = need a working proxy |
 
 Results are sorted by class first, then stealth within each class, so the best targets float to the top.
+
+### SxS Manifest Detection
+
+Windows Side-by-Side (SxS) assemblies can override the normal DLL search order. When an executable's embedded manifest declares a dependency on an SxS assembly (e.g. `Microsoft.Windows.Common-Controls` v6), the loader resolves those DLLs from `WinSxS` instead of the application directory -- making DLL hijacking impossible for those specific DLLs.
+
+Omnispex parses the embedded manifest from each target executable and flags affected DLLs with `SxS-redirected`. Common redirections:
+
+| SxS Assembly | Redirected DLLs |
+|-------------|-----------------|
+| `Microsoft.Windows.Common-Controls` | comctl32.dll, msimg32.dll |
+| `Microsoft.Windows.GdiPlus` | gdiplus.dll |
+
+DLLs flagged as SxS-redirected receive a heavy stealth penalty and a warning in the output. While they still appear in the findings (the import exists), attempting to hijack them will fail at runtime.
 
 ## PE Metadata
 

@@ -160,10 +160,20 @@ pub fn print_table(report: &Report) {
     let med_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("MED")).count();
     let low_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("LOW")).count();
 
+    let sxs_count = hijackable.iter().filter(|f| f.sxs_redirected).count();
+
     println!("  Stealth grades:");
     println!("    HIGH ({high_count}):  Low export count, not EDR-monitored - easy proxy, minimal detection risk");
     println!("    MED  ({med_count}):  Moderate exports or minor risk factors - workable but needs care");
     println!("    LOW  ({low_count}):  Many exports or EDR-hooked DLL - complex proxy and/or high detection risk");
+    if sxs_count > 0 {
+        println!();
+        println!("  [!] {sxs_count} DLL{} may be SxS-redirected (manifest overrides search order).",
+            if sxs_count == 1 { "" } else { "s" });
+        println!("      The app's embedded manifest declares SxS assembly dependencies that cause");
+        println!("      the Windows loader to resolve these DLLs from WinSxS, not the app directory.");
+        println!("      Hijacking these DLLs will likely fail despite appearing as PHANTOM.");
+    }
     println!();
 
     // Print exports section if any findings have exports

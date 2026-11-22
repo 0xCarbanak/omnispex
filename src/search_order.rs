@@ -40,6 +40,7 @@ pub struct DllFinding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_count: Option<usize>,
     pub is_delay_load: bool,
+    pub sxs_redirected: bool,
 }
 
 pub fn resolve_dll_path(
@@ -149,6 +150,7 @@ fn finding(
         stealth_notes: Vec::new(),
         export_count: None,
         is_delay_load: false,
+        sxs_redirected: false,
     }
 }
 
