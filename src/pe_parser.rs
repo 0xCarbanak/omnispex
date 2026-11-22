@@ -433,6 +433,41 @@ pub fn parse_imports(data: &[u8]) -> Result<PeImports, String> {
     Ok(PeImports { imports, delay_imports })
 }
 
+pub fn count_exports(data: &[u8]) -> Result<usize, String> {
+    let hdr = parse_pe_header(data)?;
+    if hdr.num_dd == 0 {
+        return Ok(0);
+    }
+    let export_dd = hdr.dd_base;
+    if export_dd + 8 > data.len() {
+        return Ok(0);
+    }
+    let export_rva = read_u32(data, export_dd) as usize;
+    if export_rva == 0 {
+        return Ok(0);
+    }
+    let Some(export_offset) = rva_to_offset(export_rva, &hdr.sections) else {
+        return Ok(0);
+    };
+    if export_offset + 40 > data.len() {
+        return Ok(0);
+    }
+    let num_functions = read_u32(data, export_offset + 20) as usize;
+    let addr_table_rva = read_u32(data, export_offset + 28) as usize;
+    let Some(addr_off) = rva_to_offset(addr_table_rva, &hdr.sections) else {
+        return Ok(num_functions);
+    };
+    let mut count = 0;
+    for i in 0..num_functions {
+        let entry_off = addr_off + i * 4;
+        if entry_off + 4 > data.len() { break; }
+        if read_u32(data, entry_off) != 0 {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 pub fn parse_exports(data: &[u8]) -> Result<PeExports, String> {
     let hdr = parse_pe_header(data)?;
 
@@ -620,4 +655,54 @@ fn read_cstring(data: &[u8], offset: usize) -> String {
         i += 1;
     }
     s
+}
+
+pub fn parse_manifest(data: &[u8]) -> Option<String> {
+    let hdr = parse_pe_header(data).ok()?;
+
+    if hdr.num_dd <= 2 {
+        return None;
+    }
+    let rsrc_dd = hdr.dd_base + 2 * 8;
+    if rsrc_dd + 8 > data.len() {
+        return None;
+    }
+    let rsrc_rva = read_u32(data, rsrc_dd) as usize;
+    if rsrc_rva == 0 {
+        return None;
+    }
+
+    let rsrc_offset = rva_to_offset(rsrc_rva, &hdr.sections)?;
+
+    // RT_MANIFEST = type 24
+    let manifest_data = find_resource(data, rsrc_offset, rsrc_rva, &hdr.sections, 24)?;
+    let xml = String::from_utf8_lossy(manifest_data).to_string();
+    if xml.contains("<assembly") {
+        Some(xml)
+    } else {
+        None
+    }
+}
+
+/// DLLs known to be redirected by SxS assembly dependencies in manifests.
+/// When an exe declares a dependency on an SxS assembly, the loader resolves
+/// these DLLs from WinSxS instead of the normal search order.
+pub fn sxs_redirected_dlls(manifest: &str) -> HashSet<String> {
+    let mut redirected = HashSet::new();
+    let lower = manifest.to_lowercase();
+
+    // Microsoft.Windows.Common-Controls v6 redirects comctl32 loading
+    // through WinSxS; msimg32 is loaded as a dependency of comctl32 in
+    // the SxS assembly.
+    if lower.contains("microsoft.windows.common-controls") {
+        redirected.insert("comctl32.dll".to_string());
+        redirected.insert("msimg32.dll".to_string());
+    }
+
+    // GDI+ SxS assembly
+    if lower.contains("microsoft.windows.gdiplus") {
+        redirected.insert("gdiplus.dll".to_string());
+    }
+
+    redirected
 }

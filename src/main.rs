@@ -5,7 +5,7 @@ mod known_dlls;
 mod report;
 
 use clap::Parser;
-use search_order::{classify_dll, get_search_dirs, is_api_set, is_dir_writable, DllFinding,
+use search_order::{classify_dll, get_search_dirs, is_api_set, DllFinding,
     HijackClass, resolve_dll_path};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -35,8 +35,8 @@ struct Args {
     #[arg(long)]
     dynamic_only: bool,
 
-    /// Recursive import chain depth (default: 3)
-    #[arg(long, default_value = "3")]
+    /// Recursive import chain depth (default: 1 = direct imports only)
+    #[arg(long, default_value = "1")]
     depth: usize,
 
     /// Show exports of hijackable DLLs (needed for proxy DLL generation)
@@ -92,6 +92,19 @@ fn run_single(target: &str, args: &Args) {
         }
     };
 
+    // If the target is a directory, find .exe files inside it
+    let target_path = if target_path.is_dir() {
+        match find_exe_in_dir(&target_path) {
+            Some(exe) => exe,
+            None => {
+                eprintln!("  [!] No .exe files found in: {}", target_path.display());
+                std::process::exit(1);
+            }
+        }
+    } else {
+        target_path
+    };
+
     let r = analyze_target(&target_path, args);
 
     if args.json {
@@ -106,11 +119,17 @@ fn run_single(target: &str, args: &Args) {
 
 fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let app_dir = target_path.parent().unwrap_or(Path::new("."));
-    let app_dir_writable = is_dir_writable(app_dir);
     let local_mode = args.local;
 
-    let pe_info = std::fs::read(target_path).ok()
-        .and_then(|data| pe_parser::parse_info(&data).ok());
+    let target_data = std::fs::read(target_path).ok();
+    let pe_info = target_data.as_ref()
+        .and_then(|data| pe_parser::parse_info(data).ok());
+
+    let manifest = target_data.as_ref()
+        .and_then(|data| pe_parser::parse_manifest(data));
+    let sxs_dlls = manifest.as_ref()
+        .map(|m| pe_parser::sxs_redirected_dlls(m))
+        .unwrap_or_default();
 
     let mut known_dlls = known_dlls::load_known_dlls();
     known_dlls.extend(known_dlls::loader_critical_dlls());
@@ -127,8 +146,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         }
         eprintln!("  [*] Search order:");
         for (i, dir) in search_dirs.iter().enumerate() {
-            let w = if is_dir_writable(dir) { " [WRITABLE]" } else { "" };
-            eprintln!("       {}. {}{}", i + 1, dir.display(), w);
+            eprintln!("       {}. {}", i + 1, dir.display());
         }
         eprintln!();
     }
@@ -139,6 +157,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
 
     // Collect all DLLs via static, dynamic, and recursive chain analysis
     let mut all_dlls: HashSet<String> = HashSet::new();
+    let mut delay_load_dlls: HashSet<String> = HashSet::new();
     let mut static_count = 0usize;
     let mut dynamic_count = 0usize;
     let mut dynamic_paths: HashMap<String, String> = HashMap::new();
@@ -157,8 +176,13 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
                             imports.imports.len(), imports.delay_imports.len()
                         );
                     }
-                    for dll in imports.imports.iter().chain(imports.delay_imports.iter()) {
+                    for dll in &imports.imports {
                         all_dlls.insert(dll.clone());
+                        chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
+                    }
+                    for dll in &imports.delay_imports {
+                        all_dlls.insert(dll.clone());
+                        delay_load_dlls.insert(dll.clone());
                         chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
                     }
 
@@ -231,9 +255,9 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         }
 
         let mut f = if local_mode {
-            search_order::classify_local(dll_name, &known_dlls, app_dir, app_dir_writable)
+            search_order::classify_local(dll_name, &known_dlls, app_dir)
         } else {
-            classify_dll(dll_name, &search_dirs, &known_dlls, app_dir, app_dir_writable)
+            classify_dll(dll_name, &search_dirs, &known_dlls, app_dir)
         };
 
         let in_static = !args.dynamic_only || local_mode;
@@ -257,32 +281,62 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             }
         }
 
-        if args.exports && is_hijackable(&f.class) {
-            if let Some(ref path) = f.found_path {
+        if is_hijackable(&f.class) {
+            f.is_delay_load = delay_load_dlls.contains(dll_name);
+            f.sxs_redirected = sxs_dlls.contains(&dll_name.to_lowercase());
+
+            // Resolve the DLL file to read exports from.
+            // For PHANTOM in --local mode, found_path is None because we only
+            // check the app dir. Fall back to System32.
+            let dll_file = f.found_path.clone().or_else(|| {
+                if f.class == HijackClass::Phantom || f.class == HijackClass::Missing {
+                    let sys32 = PathBuf::from("C:\\Windows\\System32").join(dll_name);
+                    if sys32.exists() { Some(sys32.display().to_string()) } else { None }
+                } else {
+                    None
+                }
+            });
+
+            if let Some(ref path) = dll_file {
                 if let Ok(dll_data) = std::fs::read(path) {
-                    if let Ok(pe_exports) = pe_parser::parse_exports(&dll_data) {
-                        f.exports = pe_exports.functions;
+                    if args.exports {
+                        if let Ok(pe_exports) = pe_parser::parse_exports(&dll_data) {
+                            f.export_count = Some(pe_exports.functions.len());
+                            f.exports = pe_exports.functions;
+                        }
+                    } else if let Ok(count) = pe_parser::count_exports(&dll_data) {
+                        f.export_count = Some(count);
                     }
                 }
             }
+
+            compute_stealth(&mut f);
         }
 
         findings.push(f);
     }
 
-    findings.sort_by_key(|f| match f.class {
-        HijackClass::Missing => 0,
-        HijackClass::Phantom => 1,
-        HijackClass::WritablePath => 2,
-        HijackClass::Sideload => 3,
-        HijackClass::KnownDll => 4,
-        HijackClass::Safe => 5,
+    findings.sort_by(|a, b| {
+        let class_ord = |c: &HijackClass| match c {
+            HijackClass::Missing => 0,
+            HijackClass::Phantom => 1,
+            HijackClass::Sideload => 2,
+            HijackClass::KnownDll => 3,
+            HijackClass::Safe => 4,
+        };
+        let stealth_ord = |s: &Option<String>| match s.as_deref() {
+            Some("HIGH") => 0,
+            Some("MED") => 1,
+            Some("LOW") => 2,
+            _ => 3,
+        };
+        class_ord(&a.class).cmp(&class_ord(&b.class))
+            .then(stealth_ord(&a.stealth).cmp(&stealth_ord(&b.stealth)))
     });
 
     report::Report {
         target: target_path.display().to_string(),
         app_dir: app_dir.display().to_string(),
-        app_dir_writable,
         static_imports: static_count,
         dynamic_loads: dynamic_count,
         pe_info,
@@ -290,10 +344,100 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     }
 }
 
+const EDR_WATCHED: &[&str] = &[
+    "amsi.dll", "crypt32.dll", "wintrust.dll", "bcrypt.dll", "ncrypt.dll",
+    "wininet.dll", "winhttp.dll", "urlmon.dll", "dbghelp.dll", "dbgcore.dll",
+    "clr.dll", "mscoree.dll", "mscorlib.dll", "ws2_32.dll", "dnsapi.dll",
+    "secur32.dll", "sspicli.dll", "schannel.dll", "crypt32.dll",
+];
+
+fn compute_stealth(f: &mut DllFinding) {
+    let mut score: i32 = 50;
+    let mut notes: Vec<String> = Vec::new();
+    let lower = f.dll_name.to_lowercase();
+
+    // Export count scoring
+    match f.export_count {
+        Some(n) if n <= 5 => {
+            score += 20;
+            notes.push(format!("{n} exports (trivial proxy)"));
+        }
+        Some(n) if n <= 20 => {
+            score += 10;
+            notes.push(format!("{n} exports"));
+        }
+        Some(n) if n <= 50 => {
+            notes.push(format!("{n} exports"));
+        }
+        Some(n) if n <= 150 => {
+            score -= 10;
+            notes.push(format!("{n} exports (complex proxy)"));
+        }
+        Some(n) => {
+            score -= 25;
+            notes.push(format!("{n} exports (massive proxy)"));
+        }
+        None => {
+            notes.push("export count unknown".into());
+        }
+    }
+
+    // Delay-load bonus
+    if f.is_delay_load {
+        score += 10;
+        notes.push("delay-load".into());
+    }
+
+    // EDR-watched penalty
+    if EDR_WATCHED.contains(&lower.as_str()) {
+        score -= 30;
+        notes.push("EDR-watched".into());
+    }
+
+    // SxS manifest redirect — DLL loads from WinSxS, not app dir
+    if f.sxs_redirected {
+        score -= 40;
+        notes.push("SxS-redirected (manifest overrides search order)".into());
+    }
+
+    // Chain depth — direct imports are simpler to exploit
+    let depth = if f.import_chain.len() > 2 { f.import_chain.len() - 1 } else { 1 };
+    match depth {
+        1 => {
+            score += 5;
+            notes.push("direct import".into());
+        }
+        2 => {
+            notes.push("depth-2 chain".into());
+        }
+        _ => {
+            score -= 5;
+            notes.push(format!("depth-{depth} chain"));
+        }
+    }
+
+    // Class bonus
+    match f.class {
+        HijackClass::Missing => {
+            score += 10;
+            notes.push("no original needed".into());
+        }
+        HijackClass::Phantom => {
+            score += 5;
+        }
+        _ => {}
+    }
+
+    let grade = if score >= 65 { "HIGH" } else if score >= 40 { "MED" } else { "LOW" };
+
+    f.stealth = Some(grade.to_string());
+    f.stealth_notes = notes;
+}
+
 fn is_hijackable(class: &HijackClass) -> bool {
     matches!(class,
         HijackClass::Missing | HijackClass::Phantom |
-        HijackClass::WritablePath | HijackClass::Sideload)
+        HijackClass::Sideload)
 }
 
 fn walk_import_chain(
@@ -422,7 +566,6 @@ fn run_batch(args: &Args) {
 
         summaries.push(report::BatchEntry {
             target: exe.display().to_string(),
-            app_dir_writable: r.app_dir_writable,
             total_imports: r.static_imports,
             hijackable_count: hijackable.len(),
             best_class,
@@ -446,6 +589,90 @@ fn run_batch(args: &Args) {
         eprintln!();
         report::print_batch_table(&batch);
     }
+}
+
+/// When the user points at a directory instead of an .exe, find the right
+/// executable inside it.  Rules:
+///   1. Collect all .exe files in the top level of the directory (not recursive).
+///   2. If exactly one, use it.
+///   3. If multiple, prefer the one whose stem matches the directory name
+///      (e.g. `notepad++.exe` inside `npp.8.6.8.portable.x64/` won't match,
+///       but `npp.exe` inside `npp/` would).
+///   4. Failing that, pick the largest .exe (most likely the main application).
+fn find_exe_in_dir(dir: &Path) -> Option<PathBuf> {
+    let entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .map(|ext| ext.to_string_lossy().to_lowercase() == "exe")
+                        .unwrap_or(false)
+            })
+            .collect(),
+        Err(_) => return None,
+    };
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    if entries.len() == 1 {
+        eprintln!("  [*] Directory target - found: {}", entries[0].display());
+        return Some(entries[0].clone());
+    }
+
+    // Multiple .exe files - try to match directory name
+    let dir_stem = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    if !dir_stem.is_empty() {
+        for exe in &entries {
+            let exe_stem = exe
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if exe_stem == dir_stem {
+                eprintln!(
+                    "  [*] Directory target ({} .exe files) - matched by name: {}",
+                    entries.len(),
+                    exe.display()
+                );
+                return Some(exe.clone());
+            }
+        }
+    }
+
+    // No name match - pick the largest .exe
+    let largest = entries
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok().map(|m| (p, m.len())))
+        .max_by_key(|(_, size)| *size)
+        .map(|(p, _)| p.clone());
+
+    if let Some(ref exe) = largest {
+        eprintln!(
+            "  [*] Directory target ({} .exe files) - selected largest: {}",
+            entries.len(),
+            exe.display()
+        );
+
+        // List the other options so the user knows
+        eprintln!("       Other .exe files in directory:");
+        for e in &entries {
+            if e != exe {
+                let size = std::fs::metadata(e)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                eprintln!("         {} ({} bytes)", e.display(), size);
+            }
+        }
+    }
+
+    largest
 }
 
 fn find_exes(dir: &Path) -> Vec<PathBuf> {

@@ -1,11 +1,22 @@
 # Omnispex
 
-<img width="1672" height="941" alt="16e55700-1b1c-4050-bcbc-4d1a9d0c76ac" src="https://github.com/user-attachments/assets/2d95e066-74c6-48c1-b5cf-2887b7132c5d" />
-
+```
+            _..---.._            
+        _.-'  _   _  '-._       |
+      .'   .-' '-' '-.   '.    -+-
+     /   .'   .---.   '.   \    |
+  --/   /    / o o \    \   \--
+    |  ;    |  ___  |    ;  |   
+  --\   \    \_____/    /   /--
+     \   '.___________.'   /    |
+      '-.__ O M N I __.-'     -+-
+     |    S P E X    |          |
+      '--.._______..--'         
+```
 
 > *"Should it be kept focussed for an extended period of time, an Omnispex will determine the weak points of those it scrutinises and pass them on to its master."*
 
-DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, follows recursive import chains, and enumerates exports -- everything you need to find and build proxy DLL hijacks.
+DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, follows recursive import chains, enumerates exports, and grades each target by stealth -- everything you need to find and build proxy DLL hijacks.
 
 **This is an offline research tool.** Run it on your own machine against a copy of the target application, then use the findings to build your payload.
 
@@ -21,7 +32,6 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 
   Target:       C:\Temp\npp\notepad++.exe
   App dir:      C:\Temp\npp
-  App writable: YES
   Architecture: x64 (GUI)
   Signed:       YES (Notepad++)
   Company:      Don HO don.h@free.fr
@@ -31,23 +41,20 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
   Original:     notepad++.exe
   Static imports:  19
 
-  Found 12 hijackable DLLs:
+  Found 9 hijackable DLLs:
 
-  CLASS          DLL                            SOURCE   DETAILS
-  -----          ---                            ------   -------
-  [!] PHANTOM    dwmapi.dll                     static   Not in app dir - plant here to hijack [14 exports]
-  [!] PHANTOM    userenv.dll                    static   Not in app dir - plant here to hijack [28 exports]
-                 chain: notepad++.exe -> version.dll -> userenv.dll
-  [*] SIDELOAD   version.dll                    static   Present in writable app dir [12 exports]
-
-  Exports (for proxy DLL generation):
-  -----------------------------------
-
-  version.dll (12 exports, 0 by ordinal only, 0 forwarded):
-    @1     GetFileVersionInfoA
-    @2     GetFileVersionInfoByHandle
-    @3     GetFileVersionInfoExA
-    ...
+  CLASS          DLL                            SOURCE   STEALTH  DETAILS
+  -----          ---                            ------   -------  -------
+  [!] PHANTOM    sensapi.dll                    static   HIGH     Not in app dir [3 exports]
+                 stealth: 3 exports (trivial proxy), direct import
+  [!] PHANTOM    version.dll                    static   HIGH     Not in app dir [17 exports]
+                 stealth: 17 exports, direct import
+  [!] PHANTOM    dwmapi.dll                     static   MED      Not in app dir [101 exports]
+                 stealth: 101 exports (complex proxy), direct import
+  [!] PHANTOM    crypt32.dll                    static   LOW      Not in app dir [307 exports]
+                 stealth: 307 exports (massive proxy), EDR-watched, direct import
+  [!] PHANTOM    wininet.dll                    static   LOW      Not in app dir [327 exports]
+                 stealth: 327 exports (massive proxy), EDR-watched, direct import
 ```
 
 ## How It Works
@@ -64,11 +71,10 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 | Class | Meaning | Attack |
 |-------|---------|--------|
 | `MISSING` | Not found anywhere in search path | Drop your DLL in app directory |
-| `PHANTOM` | Loaded from System32, but app dir is searched first and writable | Plant proxy DLL in app dir |
-| `WRITABLE_PATH` | Loaded from a writable PATH directory | Replace DLL in that directory |
-| `SIDELOAD` | Already in app dir, directory is writable | Replace with proxy DLL |
+| `PHANTOM` | Loaded from System32, but app dir is searched first | Plant proxy DLL in app dir |
+| `SIDELOAD` | Already present in app directory | Replace with proxy DLL |
 | `KNOWN_DLL` | Protected by KnownDLLs registry | Not hijackable |
-| `SAFE` | Not exploitable (non-writable location, API set, etc.) | -- |
+| `SAFE` | API set or other non-exploitable | -- |
 
 Automatically filtered: KnownDLLs (from registry), loader-critical DLLs (ntdll, kernelbase, etc.), API sets (api-ms-win-*, ext-ms-win-*).
 
@@ -129,6 +135,34 @@ JSON for scripting (exports included in output):
 ```
 omnispex.exe C:\Temp\npp\notepad++.exe --local --exports --json
 ```
+
+## Stealth Scoring
+
+Each hijackable DLL gets a stealth grade (HIGH / MED / LOW) based on how practical and covert the hijack would be:
+
+| Factor | Effect | Why |
+|--------|--------|-----|
+| Export count | Fewer = higher | Proxy DLL with 3 forwards is trivial; 300+ is fragile and slow to build |
+| EDR-watched | Penalty | crypt32, wintrust, bcrypt, ncrypt, wininet, winhttp, urlmon, amsi, dbghelp, ws2_32, dnsapi are heavily hooked by EDR products |
+| SxS-redirected | Heavy penalty | App manifest declares SxS assembly dependency that overrides DLL search order -- loader resolves from WinSxS, not app dir |
+| Delay-load | Bonus | Loaded lazily -- less likely to crash the app if the proxy has issues |
+| Chain depth | Direct > deep | Direct imports load reliably; depth-3+ chains are more fragile |
+| Class | MISSING > PHANTOM | MISSING = no original to deal with; PHANTOM = need a working proxy |
+
+Results are sorted by class first, then stealth within each class, so the best targets float to the top.
+
+### SxS Manifest Detection
+
+Windows Side-by-Side (SxS) assemblies can override the normal DLL search order. When an executable's embedded manifest declares a dependency on an SxS assembly (e.g. `Microsoft.Windows.Common-Controls` v6), the loader resolves those DLLs from `WinSxS` instead of the application directory -- making DLL hijacking impossible for those specific DLLs.
+
+Omnispex parses the embedded manifest from each target executable and flags affected DLLs with `SxS-redirected`. Common redirections:
+
+| SxS Assembly | Redirected DLLs |
+|-------------|-----------------|
+| `Microsoft.Windows.Common-Controls` | comctl32.dll, msimg32.dll |
+| `Microsoft.Windows.GdiPlus` | gdiplus.dll |
+
+DLLs flagged as SxS-redirected receive a heavy stealth penalty and a warning in the output. While they still appear in the findings (the import exists), attempting to hijack them will fail at runtime.
 
 ## PE Metadata
 

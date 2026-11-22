@@ -5,7 +5,6 @@ use crate::search_order::{DllFinding, HijackClass};
 pub struct Report {
     pub target: String,
     pub app_dir: String,
-    pub app_dir_writable: bool,
     pub static_imports: usize,
     pub dynamic_loads: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,7 +15,6 @@ pub struct Report {
 #[derive(serde::Serialize)]
 pub struct BatchEntry {
     pub target: String,
-    pub app_dir_writable: bool,
     pub total_imports: usize,
     pub hijackable_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +38,6 @@ pub fn print_table(report: &Report) {
     println!();
     println!("  Target:       {}", report.target);
     println!("  App dir:      {}", report.app_dir);
-    println!("  App writable: {}", if report.app_dir_writable { "YES" } else { "no" });
 
     if let Some(ref info) = report.pe_info {
         println!("  Architecture: {} ({})", info.arch, info.subsystem);
@@ -78,7 +75,6 @@ pub fn print_table(report: &Report) {
             f.class,
             HijackClass::Missing
                 | HijackClass::Phantom
-                | HijackClass::WritablePath
                 | HijackClass::Sideload
         ))
         .collect();
@@ -97,32 +93,35 @@ pub fn print_table(report: &Report) {
     println!();
 
     println!(
-        "  {:<14} {:<30} {:<8} {}",
-        "CLASS", "DLL", "SOURCE", "DETAILS"
+        "  {:<14} {:<30} {:<8} {:<8} {}",
+        "CLASS", "DLL", "SOURCE", "STEALTH", "DETAILS"
     );
     println!(
-        "  {:<14} {:<30} {:<8} {}",
-        "-----", "---", "------", "-------"
+        "  {:<14} {:<30} {:<8} {:<8} {}",
+        "-----", "---", "------", "-------", "-------"
     );
 
     for f in &hijackable {
         let class_colored = match f.class {
             HijackClass::Missing => format!("[!] {}", f.class),
             HijackClass::Phantom => format!("[!] {}", f.class),
-            HijackClass::WritablePath => format!("[*] {}", f.class),
             HijackClass::Sideload => format!("[*] {}", f.class),
             _ => format!("    {}", f.class),
         };
 
+        let stealth_str = f.stealth.as_deref().unwrap_or("-");
+
         let exports_tag = if !f.exports.is_empty() {
             format!(" [{} exports]", f.exports.len())
+        } else if let Some(count) = f.export_count {
+            format!(" [{count} exports]")
         } else {
             String::new()
         };
 
         println!(
-            "  {:<14} {:<30} {:<8} {}{}",
-            class_colored, f.dll_name, f.source, f.details, exports_tag
+            "  {:<14} {:<30} {:<8} {:<8} {}{}",
+            class_colored, f.dll_name, f.source, stealth_str, f.details, exports_tag
         );
 
         if f.import_chain.len() > 2 {
@@ -131,12 +130,18 @@ pub fn print_table(report: &Report) {
                 "", f.import_chain.join(" -> ")
             );
         }
+
+        if !f.stealth_notes.is_empty() {
+            println!(
+                "  {:<14} stealth: {}",
+                "", f.stealth_notes.join(", ")
+            );
+        }
     }
     println!();
 
     let missing_count = hijackable.iter().filter(|f| f.class == HijackClass::Missing).count();
     let phantom_count = hijackable.iter().filter(|f| f.class == HijackClass::Phantom).count();
-    let writable_count = hijackable.iter().filter(|f| f.class == HijackClass::WritablePath).count();
     let sideload_count = hijackable.iter().filter(|f| f.class == HijackClass::Sideload).count();
 
     println!("  Summary:");
@@ -146,11 +151,28 @@ pub fn print_table(report: &Report) {
     if phantom_count > 0 {
         println!("    PHANTOM ({phantom_count}):       Build proxy DLL - original loads from System32 but app dir is searched first");
     }
-    if writable_count > 0 {
-        println!("    WRITABLE_PATH ({writable_count}): Replace DLL in its writable PATH location");
-    }
     if sideload_count > 0 {
-        println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in writable app dir with proxy");
+        println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in app dir with proxy");
+    }
+    println!();
+
+    let high_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("HIGH")).count();
+    let med_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("MED")).count();
+    let low_count = hijackable.iter().filter(|f| f.stealth.as_deref() == Some("LOW")).count();
+
+    let sxs_count = hijackable.iter().filter(|f| f.sxs_redirected).count();
+
+    println!("  Stealth grades:");
+    println!("    HIGH ({high_count}):  Low export count, not EDR-monitored - easy proxy, minimal detection risk");
+    println!("    MED  ({med_count}):  Moderate exports or minor risk factors - workable but needs care");
+    println!("    LOW  ({low_count}):  Many exports or EDR-hooked DLL - complex proxy and/or high detection risk");
+    if sxs_count > 0 {
+        println!();
+        println!("  [!] {sxs_count} DLL{} may be SxS-redirected (manifest overrides search order).",
+            if sxs_count == 1 { "" } else { "s" });
+        println!("      The app's embedded manifest declares SxS assembly dependencies that cause");
+        println!("      the Windows loader to resolve these DLLs from WinSxS, not the app directory.");
+        println!("      Hijacking these DLLs will likely fail despite appearing as PHANTOM.");
     }
     println!();
 
