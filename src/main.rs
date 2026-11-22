@@ -35,8 +35,8 @@ struct Args {
     #[arg(long)]
     dynamic_only: bool,
 
-    /// Recursive import chain depth (default: 1 = direct imports only)
-    #[arg(long, default_value = "1")]
+    /// Recursive import chain depth (default: 3)
+    #[arg(long, default_value = "3")]
     depth: usize,
 
     /// Show exports of hijackable DLLs (needed for proxy DLL generation)
