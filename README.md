@@ -11,7 +11,7 @@ DLL search order hijacking scanner for Windows executables. Parses PE imports, w
 ## Quick Start
 
 ```
-omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
+omnispex.exe C:\Temp\npp\notepad++.exe 
 ```
 
 ```
