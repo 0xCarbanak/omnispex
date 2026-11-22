@@ -5,7 +5,6 @@ use crate::search_order::{DllFinding, HijackClass};
 pub struct Report {
     pub target: String,
     pub app_dir: String,
-    pub app_dir_writable: bool,
     pub static_imports: usize,
     pub dynamic_loads: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,7 +15,6 @@ pub struct Report {
 #[derive(serde::Serialize)]
 pub struct BatchEntry {
     pub target: String,
-    pub app_dir_writable: bool,
     pub total_imports: usize,
     pub hijackable_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +38,6 @@ pub fn print_table(report: &Report) {
     println!();
     println!("  Target:       {}", report.target);
     println!("  App dir:      {}", report.app_dir);
-    println!("  App writable: {}", if report.app_dir_writable { "YES" } else { "no" });
 
     if let Some(ref info) = report.pe_info {
         println!("  Architecture: {} ({})", info.arch, info.subsystem);
@@ -78,7 +75,6 @@ pub fn print_table(report: &Report) {
             f.class,
             HijackClass::Missing
                 | HijackClass::Phantom
-                | HijackClass::WritablePath
                 | HijackClass::Sideload
         ))
         .collect();
@@ -109,7 +105,6 @@ pub fn print_table(report: &Report) {
         let class_colored = match f.class {
             HijackClass::Missing => format!("[!] {}", f.class),
             HijackClass::Phantom => format!("[!] {}", f.class),
-            HijackClass::WritablePath => format!("[*] {}", f.class),
             HijackClass::Sideload => format!("[*] {}", f.class),
             _ => format!("    {}", f.class),
         };
@@ -147,7 +142,6 @@ pub fn print_table(report: &Report) {
 
     let missing_count = hijackable.iter().filter(|f| f.class == HijackClass::Missing).count();
     let phantom_count = hijackable.iter().filter(|f| f.class == HijackClass::Phantom).count();
-    let writable_count = hijackable.iter().filter(|f| f.class == HijackClass::WritablePath).count();
     let sideload_count = hijackable.iter().filter(|f| f.class == HijackClass::Sideload).count();
 
     println!("  Summary:");
@@ -157,11 +151,8 @@ pub fn print_table(report: &Report) {
     if phantom_count > 0 {
         println!("    PHANTOM ({phantom_count}):       Build proxy DLL - original loads from System32 but app dir is searched first");
     }
-    if writable_count > 0 {
-        println!("    WRITABLE_PATH ({writable_count}): Replace DLL in its writable PATH location");
-    }
     if sideload_count > 0 {
-        println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in writable app dir with proxy");
+        println!("    SIDELOAD ({sideload_count}):     Replace existing DLL in app dir with proxy");
     }
     println!();
 

@@ -16,7 +16,7 @@
 
 > *"Should it be kept focussed for an extended period of time, an Omnispex will determine the weak points of those it scrutinises and pass them on to its master."*
 
-DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, checks directory permissions, follows recursive import chains, and enumerates exports -- everything you need to find and build proxy DLL hijacks.
+DLL search order hijacking scanner for Windows executables. Parses PE imports, walks the DLL search order, follows recursive import chains, enumerates exports, and grades each target by stealth -- everything you need to find and build proxy DLL hijacks.
 
 **This is an offline research tool.** Run it on your own machine against a copy of the target application, then use the findings to build your payload.
 
@@ -32,7 +32,6 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 
   Target:       C:\Temp\npp\notepad++.exe
   App dir:      C:\Temp\npp
-  App writable: YES
   Architecture: x64 (GUI)
   Signed:       YES (Notepad++)
   Company:      Don HO don.h@free.fr
@@ -72,11 +71,10 @@ omnispex.exe C:\Temp\npp\notepad++.exe --local --exports
 | Class | Meaning | Attack |
 |-------|---------|--------|
 | `MISSING` | Not found anywhere in search path | Drop your DLL in app directory |
-| `PHANTOM` | Loaded from System32, but app dir is searched first and writable | Plant proxy DLL in app dir |
-| `WRITABLE_PATH` | Loaded from a writable PATH directory | Replace DLL in that directory |
-| `SIDELOAD` | Already in app dir, directory is writable | Replace with proxy DLL |
+| `PHANTOM` | Loaded from System32, but app dir is searched first | Plant proxy DLL in app dir |
+| `SIDELOAD` | Already present in app directory | Replace with proxy DLL |
 | `KNOWN_DLL` | Protected by KnownDLLs registry | Not hijackable |
-| `SAFE` | Not exploitable (non-writable location, API set, etc.) | -- |
+| `SAFE` | API set or other non-exploitable | -- |
 
 Automatically filtered: KnownDLLs (from registry), loader-critical DLLs (ntdll, kernelbase, etc.), API sets (api-ms-win-*, ext-ms-win-*).
 

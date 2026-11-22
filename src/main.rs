@@ -5,7 +5,7 @@ mod known_dlls;
 mod report;
 
 use clap::Parser;
-use search_order::{classify_dll, get_search_dirs, is_api_set, is_dir_writable, DllFinding,
+use search_order::{classify_dll, get_search_dirs, is_api_set, DllFinding,
     HijackClass, resolve_dll_path};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -106,7 +106,6 @@ fn run_single(target: &str, args: &Args) {
 
 fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let app_dir = target_path.parent().unwrap_or(Path::new("."));
-    let app_dir_writable = is_dir_writable(app_dir);
     let local_mode = args.local;
 
     let pe_info = std::fs::read(target_path).ok()
@@ -127,8 +126,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         }
         eprintln!("  [*] Search order:");
         for (i, dir) in search_dirs.iter().enumerate() {
-            let w = if is_dir_writable(dir) { " [WRITABLE]" } else { "" };
-            eprintln!("       {}. {}{}", i + 1, dir.display(), w);
+            eprintln!("       {}. {}", i + 1, dir.display());
         }
         eprintln!();
     }
@@ -237,9 +235,9 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         }
 
         let mut f = if local_mode {
-            search_order::classify_local(dll_name, &known_dlls, app_dir, app_dir_writable)
+            search_order::classify_local(dll_name, &known_dlls, app_dir)
         } else {
-            classify_dll(dll_name, &search_dirs, &known_dlls, app_dir, app_dir_writable)
+            classify_dll(dll_name, &search_dirs, &known_dlls, app_dir)
         };
 
         let in_static = !args.dynamic_only || local_mode;
@@ -301,10 +299,9 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         let class_ord = |c: &HijackClass| match c {
             HijackClass::Missing => 0,
             HijackClass::Phantom => 1,
-            HijackClass::WritablePath => 2,
-            HijackClass::Sideload => 3,
-            HijackClass::KnownDll => 4,
-            HijackClass::Safe => 5,
+            HijackClass::Sideload => 2,
+            HijackClass::KnownDll => 3,
+            HijackClass::Safe => 4,
         };
         let stealth_ord = |s: &Option<String>| match s.as_deref() {
             Some("HIGH") => 0,
@@ -319,7 +316,6 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     report::Report {
         target: target_path.display().to_string(),
         app_dir: app_dir.display().to_string(),
-        app_dir_writable,
         static_imports: static_count,
         dynamic_loads: dynamic_count,
         pe_info,
@@ -414,7 +410,7 @@ fn compute_stealth(f: &mut DllFinding) {
 fn is_hijackable(class: &HijackClass) -> bool {
     matches!(class,
         HijackClass::Missing | HijackClass::Phantom |
-        HijackClass::WritablePath | HijackClass::Sideload)
+        HijackClass::Sideload)
 }
 
 fn walk_import_chain(
@@ -543,7 +539,6 @@ fn run_batch(args: &Args) {
 
         summaries.push(report::BatchEntry {
             target: exe.display().to_string(),
-            app_dir_writable: r.app_dir_writable,
             total_imports: r.static_imports,
             hijackable_count: hijackable.len(),
             best_class,

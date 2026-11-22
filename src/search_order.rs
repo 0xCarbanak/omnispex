@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 pub enum HijackClass {
     Missing,
     Phantom,
-    WritablePath,
     Sideload,
     KnownDll,
     Safe,
@@ -16,7 +15,6 @@ impl std::fmt::Display for HijackClass {
         match self {
             HijackClass::Missing => write!(f, "MISSING"),
             HijackClass::Phantom => write!(f, "PHANTOM"),
-            HijackClass::WritablePath => write!(f, "WRITABLE_PATH"),
             HijackClass::Sideload => write!(f, "SIDELOAD"),
             HijackClass::KnownDll => write!(f, "KNOWN_DLL"),
             HijackClass::Safe => write!(f, "SAFE"),
@@ -29,7 +27,6 @@ pub struct DllFinding {
     pub dll_name: String,
     pub class: HijackClass,
     pub found_path: Option<String>,
-    pub app_dir_writable: bool,
     pub source: String,
     pub details: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -134,32 +131,16 @@ pub fn is_api_set(name: &str) -> bool {
         || lower.starts_with("api-ms-onecoreuap-")
 }
 
-pub fn is_dir_writable(dir: &Path) -> bool {
-    if !dir.exists() {
-        return false;
-    }
-    let probe = dir.join(".cradle_write_test");
-    match std::fs::File::create(&probe) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 fn finding(
     dll_name: &str,
     class: HijackClass,
     found_path: Option<String>,
-    app_dir_writable: bool,
     details: String,
 ) -> DllFinding {
     DllFinding {
         dll_name: dll_name.to_string(),
         class,
         found_path,
-        app_dir_writable,
         source: String::new(),
         details,
         import_chain: Vec::new(),
@@ -176,18 +157,17 @@ pub fn classify_dll(
     search_dirs: &[PathBuf],
     known_dlls: &HashSet<String>,
     app_dir: &Path,
-    app_dir_writable: bool,
 ) -> DllFinding {
     let lower = dll_name.to_lowercase();
 
     if is_api_set(&lower) {
-        return finding(dll_name, HijackClass::Safe, None, app_dir_writable,
+        return finding(dll_name, HijackClass::Safe, None,
             "API set - virtual, not a real DLL".into());
     }
 
     if known_dlls.contains(&lower) {
         return finding(dll_name, HijackClass::KnownDll,
-            Some(format!("C:\\Windows\\System32\\{lower}")), app_dir_writable,
+            Some(format!("C:\\Windows\\System32\\{lower}")),
             "Protected by KnownDLLs - always loads from System32".into());
     }
 
@@ -198,36 +178,17 @@ pub fn classify_dll(
             let path = candidate.display().to_string();
 
             if is_app_dir {
-                if app_dir_writable {
-                    return finding(dll_name, HijackClass::Sideload, Some(path),
-                        app_dir_writable,
-                        "Found in writable app dir - replace with proxy DLL".into());
-                }
-                return finding(dll_name, HijackClass::Safe, Some(path),
-                    app_dir_writable, "In app dir but dir is not writable".into());
+                return finding(dll_name, HijackClass::Sideload, Some(path),
+                    "In app dir - replace with proxy DLL".into());
             }
 
-            if app_dir_writable {
-                return finding(dll_name, HijackClass::Phantom, Some(path),
-                    app_dir_writable,
-                    format!("Loaded from {} - plant in writable app dir to hijack",
-                        dir.display()));
-            }
-
-            if is_dir_writable(dir) {
-                return finding(dll_name, HijackClass::WritablePath, Some(path),
-                    app_dir_writable,
-                    format!("Loaded from writable dir {} - replace in place",
-                        dir.display()));
-            }
-
-            return finding(dll_name, HijackClass::Safe, Some(path),
-                app_dir_writable,
-                format!("Found in {} (not writable)", dir.display()));
+            return finding(dll_name, HijackClass::Phantom, Some(path),
+                format!("Loaded from {} - plant proxy in app dir",
+                    dir.display()));
         }
     }
 
-    finding(dll_name, HijackClass::Missing, None, app_dir_writable,
+    finding(dll_name, HijackClass::Missing, None,
         "Not found in any search path - drop in app dir".into())
 }
 
@@ -235,39 +196,28 @@ pub fn classify_local(
     dll_name: &str,
     known_dlls: &HashSet<String>,
     app_dir: &Path,
-    app_dir_writable: bool,
 ) -> DllFinding {
     let lower = dll_name.to_lowercase();
 
     if is_api_set(&lower) {
-        return finding(dll_name, HijackClass::Safe, None, app_dir_writable,
+        return finding(dll_name, HijackClass::Safe, None,
             "API set - virtual, not a real DLL".into());
     }
 
     if known_dlls.contains(&lower) {
-        return finding(dll_name, HijackClass::KnownDll, None, app_dir_writable,
+        return finding(dll_name, HijackClass::KnownDll, None,
             "Protected by KnownDLLs".into());
     }
 
     let candidate = app_dir.join(&lower);
     if candidate.exists() {
         let path = candidate.display().to_string();
-        if app_dir_writable {
-            return finding(dll_name, HijackClass::Sideload, Some(path),
-                app_dir_writable,
-                "Present in writable app dir - replace with proxy DLL".into());
-        }
-        return finding(dll_name, HijackClass::Safe, Some(path),
-            app_dir_writable, "In app dir but dir is not writable".into());
+        return finding(dll_name, HijackClass::Sideload, Some(path),
+            "In app dir - replace with proxy DLL".into());
     }
 
-    if app_dir_writable {
-        finding(dll_name, HijackClass::Phantom, None, app_dir_writable,
-            "Not in app dir - plant here to hijack (app dir is writable)".into())
-    } else {
-        finding(dll_name, HijackClass::Safe, None, app_dir_writable,
-            "Not in app dir and dir is not writable".into())
-    }
+    finding(dll_name, HijackClass::Phantom, None,
+        "Not in app dir - plant proxy here to hijack".into())
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
