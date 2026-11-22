@@ -89,7 +89,7 @@ omnispex.exe [target.exe] [options]
 | `--static-only` | Parse PE imports + walk search order, no execution |
 | `--dynamic-only` | Only run debug session |
 | `--scan-dir <path>` | Batch scan: find all EXEs recursively, rank results |
-| `--depth <N>` | Recursive import chain depth (default: 3) |
+| `--depth <N>` | Recursive import chain depth (default: 1, use 3+ for transitive chains) |
 | `--exports` | Show exports of hijackable DLLs (for proxy DLL generation) |
 | `--timeout <secs>` | Dynamic analysis timeout (default: 30) |
 | `--args <str>` | Arguments to pass to target during dynamic analysis |
@@ -205,7 +205,7 @@ Sorts by hijackable count descending, shows the top 5 DLLs per target. Use this 
 
 ## Recursive Import Chains
 
-`--depth` controls how deep the tool follows DLL dependencies beyond the target's direct imports. The default depth of 3 catches most practical chains.
+`--depth` controls how deep the tool follows DLL dependencies beyond the target's direct imports. The default depth of 1 shows only the target's direct imports. Use `--depth 3` to follow transitive dependency chains.
 
 At depth 1, only the EXE's own imports are checked. At higher depths, the tool reads the PE of each resolved DLL and walks its imports too, using BFS to find the shortest path from the EXE to each discovered DLL:
 
