@@ -218,6 +218,9 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         }
     }
 
+    // Snapshot: everything in all_dlls at this point came from static analysis
+    let static_dlls = all_dlls.clone();
+
     // Dynamic analysis
     if !args.static_only && !local_mode {
         eprintln!("  [*] Dynamic analysis: launching target under debugger ({}s timeout)...", args.timeout);
@@ -257,7 +260,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let mut findings: Vec<DllFinding> = Vec::new();
 
     for dll_name in &all_dlls {
-        if (is_api_set(dll_name) || search_order::is_noise_dll(dll_name)) && !args.show_all {
+        if is_api_set(dll_name) && !args.show_all {
             continue;
         }
 
@@ -267,7 +270,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             classify_dll(dll_name, &search_dirs, &known_dlls, app_dir)
         };
 
-        let in_static = !args.dynamic_only || local_mode;
+        let in_static = static_dlls.contains(dll_name);
         let in_dynamic = dynamic_paths.contains_key(dll_name);
         f.source = match (in_static, in_dynamic) {
             (true, true) => "both".into(),
@@ -275,6 +278,12 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             (false, true) => "dynamic".into(),
             _ => "".into(),
         };
+
+        // Dynamic-only DLLs are Windows background loads, not app-specific.
+        // Only show them with --show-all.
+        if f.source == "dynamic" && !args.show_all {
+            continue;
+        }
 
         if let Some(path) = dynamic_paths.get(dll_name) {
             if f.found_path.is_none() {
