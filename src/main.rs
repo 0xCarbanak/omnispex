@@ -35,8 +35,8 @@ struct Args {
     #[arg(long)]
     dynamic_only: bool,
 
-    /// Recursive import chain depth (default: 1 = direct imports only)
-    #[arg(long, default_value = "1")]
+    /// Recursive import chain depth
+    #[arg(long, default_value = "3")]
     depth: usize,
 
     /// Show exports of hijackable DLLs (needed for proxy DLL generation)
@@ -211,9 +211,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
 
     // Dynamic analysis
     if !args.static_only && !local_mode {
-        if args.verbose {
-            eprintln!("  [*] Launching dynamic analysis (timeout: {}s)...", args.timeout);
-        }
+        eprintln!("  [*] Dynamic analysis: launching target under debugger ({}s timeout)...", args.timeout);
         match debugger::run_debug_session(
             target_path.to_str().unwrap_or(""),
             args.args.as_deref(),
