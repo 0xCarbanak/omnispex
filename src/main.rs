@@ -115,12 +115,15 @@ fn run_single(target: &str, args: &Args) {
         target_path
     };
 
+    if !args.json {
+        banner::print_banner();
+    }
+
     let r = analyze_target(&target_path, args);
 
     if args.json {
         report::print_json(&r);
     } else {
-        banner::print_banner();
         report::print_table(&r);
         if args.show_all {
             report::print_all(&r);
@@ -541,6 +544,10 @@ fn run_batch(args: &Args) {
         std::process::exit(1);
     }
 
+    if !args.json {
+        banner::print_banner();
+    }
+
     eprintln!("  [*] Scanning {} for executables...", scan_dir);
     let exes = find_exes(scan_path);
     eprintln!("  [*] Found {} executables", exes.len());
@@ -612,7 +619,6 @@ fn run_batch(args: &Args) {
         report::print_batch_json(&batch);
     } else {
         eprintln!();
-        banner::print_banner();
         report::print_batch_table(&batch);
     }
 }
