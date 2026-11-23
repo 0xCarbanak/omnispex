@@ -5,7 +5,7 @@ mod known_dlls;
 mod report;
 
 use clap::Parser;
-use search_order::{classify_dll, get_search_dirs, is_api_set, DllFinding,
+use search_order::{classify_dll, get_search_dirs, is_api_set, is_noise_dll, DllFinding,
     HijackClass, resolve_dll_path};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -260,7 +260,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let mut findings: Vec<DllFinding> = Vec::new();
 
     for dll_name in &all_dlls {
-        if is_api_set(dll_name) && !args.show_all {
+        if (is_api_set(dll_name) || is_noise_dll(dll_name)) && !args.show_all {
             continue;
         }
 
@@ -283,6 +283,13 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
         // Only show them with --show-all.
         if f.source == "dynamic" && !args.show_all {
             continue;
+        }
+
+        // Dynamic-only system DLLs are OS/GUI loads, not app-specific
+        if !in_static && in_dynamic && !args.show_all {
+            if matches!(f.class, HijackClass::Phantom) {
+                continue;
+            }
         }
 
         if let Some(path) = dynamic_paths.get(dll_name) {
