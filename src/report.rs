@@ -102,12 +102,12 @@ pub fn print_table(report: &Report) {
     );
 
     for f in &hijackable {
-        let class_colored = match f.class {
-            HijackClass::Missing => format!("[!] {}", f.class),
-            HijackClass::Phantom => format!("[!] {}", f.class),
-            HijackClass::Sideload => format!("[*] {}", f.class),
-            _ => format!("    {}", f.class),
+        let grade_prefix = match f.stealth.as_deref() {
+            Some("HIGH") => "[+]",
+            Some("MED") => "[*]",
+            _ => "[!]",
         };
+        let class_colored = format!("{} {}", grade_prefix, f.class);
 
         let stealth_str = f.stealth.as_deref().unwrap_or("-");
 
@@ -131,10 +131,15 @@ pub fn print_table(report: &Report) {
             );
         }
 
-        if !f.stealth_notes.is_empty() {
+        let mut notes = f.stealth_notes.clone();
+        if f.sxs_redirected {
+            notes.retain(|n| !n.contains("SxS"));
+            notes.push("SxS manifest present - test before relying on this target".into());
+        }
+        if !notes.is_empty() {
             println!(
                 "  {:<14} stealth: {}",
-                "", f.stealth_notes.join(", ")
+                "", notes.join(", ")
             );
         }
     }
@@ -163,16 +168,17 @@ pub fn print_table(report: &Report) {
     let sxs_count = hijackable.iter().filter(|f| f.sxs_redirected).count();
 
     println!("  Stealth grades:");
-    println!("    HIGH ({high_count}):  Low export count, not EDR-monitored - easy proxy, minimal detection risk");
-    println!("    MED  ({med_count}):  Moderate exports or minor risk factors - workable but needs care");
-    println!("    LOW  ({low_count}):  Many exports or EDR-hooked DLL - complex proxy and/or high detection risk");
+    println!("    [+] HIGH ({high_count}):  Low export count, not EDR-monitored - easy proxy, minimal detection risk");
+    println!("    [*] MED  ({med_count}):  Moderate exports or minor risk factors - workable but needs care");
+    println!("    [!] LOW  ({low_count}):  Many exports, EDR-hooked, or SxS-redirected - complex proxy and/or high detection risk");
     if sxs_count > 0 {
         println!();
-        println!("  [!] {sxs_count} DLL{} may be SxS-redirected (manifest overrides search order).",
-            if sxs_count == 1 { "" } else { "s" });
-        println!("      The app's embedded manifest declares SxS assembly dependencies that cause");
-        println!("      the Windows loader to resolve these DLLs from WinSxS, not the app directory.");
-        println!("      Hijacking these DLLs will likely fail despite appearing as PHANTOM.");
+        println!("  [*] {sxs_count} DLL{} ha{} an SxS manifest entry.",
+            if sxs_count == 1 { "" } else { "s" },
+            if sxs_count == 1 { "s" } else { "ve" });
+        println!("      The app manifest declares SxS dependencies that MAY cause the loader to");
+        println!("      resolve from WinSxS instead of the app directory. In practice, DLL search");
+        println!("      order hijacking often still works - test on target before ruling these out.");
     }
     println!();
 

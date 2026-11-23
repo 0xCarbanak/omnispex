@@ -5,8 +5,8 @@ mod known_dlls;
 mod report;
 
 use clap::Parser;
-use search_order::{classify_dll, get_search_dirs, is_api_set, DllFinding,
-    HijackClass, resolve_dll_path};
+use search_order::{classify_dll, get_search_dirs, is_api_set, is_noise_dll,
+    DllFinding, HijackClass, resolve_dll_path};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -36,7 +36,7 @@ struct Args {
     dynamic_only: bool,
 
     /// Recursive import chain depth
-    #[arg(long, default_value = "3")]
+    #[arg(long, default_value = "1")]
     depth: usize,
 
     /// Show exports of hijackable DLLs (needed for proxy DLL generation)
@@ -157,6 +157,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
 
     // Collect all DLLs via static, dynamic, and recursive chain analysis
     let mut all_dlls: HashSet<String> = HashSet::new();
+    let mut static_dlls: HashSet<String> = HashSet::new();
     let mut delay_load_dlls: HashSet<String> = HashSet::new();
     let mut static_count = 0usize;
     let mut dynamic_count = 0usize;
@@ -178,10 +179,12 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
                     }
                     for dll in &imports.imports {
                         all_dlls.insert(dll.clone());
+                        static_dlls.insert(dll.clone());
                         chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
                     }
                     for dll in &imports.delay_imports {
                         all_dlls.insert(dll.clone());
+                        static_dlls.insert(dll.clone());
                         delay_load_dlls.insert(dll.clone());
                         chains.insert(dll.clone(), vec![target_name.clone(), dll.clone()]);
                     }
@@ -248,7 +251,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
     let mut findings: Vec<DllFinding> = Vec::new();
 
     for dll_name in &all_dlls {
-        if is_api_set(dll_name) && !args.show_all {
+        if (is_api_set(dll_name) || is_noise_dll(dll_name)) && !args.show_all {
             continue;
         }
 
@@ -258,7 +261,7 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             classify_dll(dll_name, &search_dirs, &known_dlls, app_dir)
         };
 
-        let in_static = !args.dynamic_only || local_mode;
+        let in_static = static_dlls.contains(dll_name) || chains.contains_key(dll_name);
         let in_dynamic = dynamic_paths.contains_key(dll_name);
         f.source = match (in_static, in_dynamic) {
             (true, true) => "both".into(),
@@ -266,6 +269,16 @@ fn analyze_target(target_path: &Path, args: &Args) -> report::Report {
             (false, true) => "dynamic".into(),
             _ => "".into(),
         };
+
+        // Filter dynamic-only system DLLs: these are loaded by the OS/GUI
+        // subsystem into every process, not specific to this app.
+        // Only keep dynamic-only DLLs if they're MISSING (app tried to load)
+        // or SIDELOAD (already in app dir).
+        if !in_static && in_dynamic && !args.show_all {
+            if matches!(f.class, HijackClass::Phantom) {
+                continue;
+            }
+        }
 
         if let Some(path) = dynamic_paths.get(dll_name) {
             if f.found_path.is_none() {

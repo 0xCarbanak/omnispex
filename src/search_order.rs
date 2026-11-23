@@ -127,9 +127,23 @@ pub fn get_search_dirs(app_dir: &Path) -> Vec<PathBuf> {
 
 pub fn is_api_set(name: &str) -> bool {
     let lower = name.to_lowercase();
-    lower.starts_with("api-ms-win-")
-        || lower.starts_with("ext-ms-win-")
-        || lower.starts_with("api-ms-onecoreuap-")
+    lower.starts_with("api-ms-")
+        || lower.starts_with("ext-ms-")
+}
+
+pub fn is_noise_dll(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    if lower.ends_with("_hotpatch.dll") {
+        return true;
+    }
+    if (lower.starts_with("nv") && !lower.starts_with("nvapi"))
+        && (lower.contains("wgf") || lower.contains("ldumd") || lower.contains("gpucomp")
+            || lower.contains("memmap") || lower.contains("spcap") || lower.contains("optimus")
+            || lower.contains("cuda") || lower.contains("encode") || lower.contains("fbc"))
+    {
+        return true;
+    }
+    false
 }
 
 fn finding(
