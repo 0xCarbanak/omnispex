@@ -3,6 +3,7 @@ mod debugger;
 mod search_order;
 mod known_dlls;
 mod report;
+mod banner;
 
 use clap::Parser;
 use search_order::{classify_dll, get_search_dirs, is_api_set, is_noise_dll, DllFinding,
@@ -119,6 +120,7 @@ fn run_single(target: &str, args: &Args) {
     if args.json {
         report::print_json(&r);
     } else {
+        banner::print_banner();
         report::print_table(&r);
         if args.show_all {
             report::print_all(&r);
@@ -610,6 +612,7 @@ fn run_batch(args: &Args) {
         report::print_batch_json(&batch);
     } else {
         eprintln!();
+        banner::print_banner();
         report::print_batch_table(&batch);
     }
 }
