@@ -128,6 +128,7 @@ fn run_single(target: &str, args: &Args) {
         if args.show_all {
             report::print_all(&r);
         }
+        banner::print_closing();
     }
 }
 
@@ -620,6 +621,7 @@ fn run_batch(args: &Args) {
     } else {
         eprintln!();
         report::print_batch_table(&batch);
+        banner::print_closing();
     }
 }
 

@@ -75,6 +75,11 @@ pub fn print_banner() {
     println!();
 }
 
+pub fn print_closing() {
+    println!("  May the Omnissiah bless your circuits.");
+    println!();
+}
+
 fn pick_index() -> usize {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
